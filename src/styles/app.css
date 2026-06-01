@@ -4,6 +4,26 @@ body {
   font-family: "Outfit", "Segoe UI", sans-serif;
 }
 
+/* ── Scrollbars: thin, transparent track, green thumb ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #b8f060 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #b8f060;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #c6f57e;
+}
+
 .app {
   min-height: 100vh;
   padding: 1.5rem;
@@ -456,14 +476,72 @@ body {
   gap: 2.5rem;
   padding: 1.5rem 0;
   position: relative;
-  animation: rise 500ms ease both;
 }
+
+/* Soft ambient glow drifting behind the hero — sets the mood without noise.
+   A fixed, clipped layer keeps the glow full-bleed without ever adding scroll. */
+.stage-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.stage-aurora::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 130%;
+  height: 130%;
+  transform: translate(-50%, -50%);
+  background:
+    radial-gradient(
+      32% 38% at 32% 34%,
+      rgba(184, 240, 96, 0.13),
+      transparent 70%
+    ),
+    radial-gradient(
+      34% 40% at 70% 60%,
+      rgba(96, 150, 250, 0.1),
+      transparent 70%
+    );
+  filter: blur(36px);
+  opacity: 0;
+  animation:
+    aurora-in 1.2s ease 0.1s forwards,
+    aurora-drift 18s ease-in-out 1.3s infinite alternate;
+}
+
 .hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
   gap: 1.1rem;
+}
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: #9aa6bf;
+  padding: 0.3rem 0.75rem 0.3rem 0.6rem;
+  border: 1px solid rgba(184, 240, 96, 0.18);
+  border-radius: 999px;
+  background: rgba(184, 240, 96, 0.05);
+  opacity: 0;
+  animation: word-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.05s forwards;
+}
+.hero-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b8f060;
+  box-shadow: 0 0 8px rgba(184, 240, 96, 0.7);
+  animation: badge-pulse 2.4s ease-out infinite;
 }
 .hero h1 {
   font-family: "Instrument Serif", serif;
@@ -474,10 +552,61 @@ body {
   font-weight: 400;
   color: #eef1f6;
 }
+.hero-word,
 .hero-mark {
+  display: inline-block;
+  opacity: 0;
+  animation: word-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.hero-word:nth-of-type(1) {
+  animation-delay: 0.14s;
+}
+.hero-word:nth-of-type(2) {
+  animation-delay: 0.22s;
+}
+.hero-mark {
+  position: relative;
   font-style: italic;
-  color: #f4f7fc;
   white-space: nowrap;
+  padding: 0.04em 0.06em 0.16em;
+  animation: word-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) 0.3s forwards;
+}
+.hero-mark-text {
+  position: relative;
+  z-index: 1;
+  background: linear-gradient(
+    100deg,
+    #f4f7fc 0%,
+    #f4f7fc 26%,
+    #d6f59a 44%,
+    #b8f060 54%,
+    #f4f7fc 74%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: mark-shimmer 7s linear 1s infinite;
+}
+.hero-underline {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  bottom: 0.04em;
+  width: 100%;
+  height: 0.42em;
+  overflow: visible;
+}
+.hero-underline path {
+  fill: none;
+  stroke: #b8f060;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  filter: drop-shadow(0 0 5px rgba(184, 240, 96, 0.45));
+  animation: underline-draw 0.9s ease 0.85s forwards;
 }
 .hero-sub {
   font-size: 0.95rem;
@@ -486,9 +615,13 @@ body {
   max-width: 42ch;
   margin: 0;
   letter-spacing: 0.005em;
+  opacity: 0;
+  animation: word-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) 0.42s forwards;
 }
 
 .dropzone {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -498,10 +631,15 @@ body {
   cursor: pointer;
   padding: 3.5rem 2rem;
   text-align: center;
+  overflow: hidden;
+  opacity: 0;
   transition:
-    border-color 180ms ease,
-    background 180ms ease;
+    border-color 240ms ease,
+    background 240ms ease,
+    transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 320ms ease;
   user-select: none;
+  animation: word-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) 0.52s forwards;
 }
 .dropzone:focus-visible {
   outline: 2px solid #b8f060;
@@ -510,30 +648,98 @@ body {
 .dropzone:hover,
 .dropzone.over {
   border-color: #b8f060;
-  background: rgba(184, 240, 96, 0.04);
+  background: rgba(184, 240, 96, 0.045);
+  transform: translateY(-4px);
+  box-shadow:
+    0 24px 55px -24px rgba(184, 240, 96, 0.3),
+    inset 0 0 0 1px rgba(184, 240, 96, 0.08);
 }
+
+/* Accent glow that tracks the cursor inside the dropzone. */
+.dz-spotlight {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    220px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(184, 240, 96, 0.16),
+    transparent 60%
+  );
+  transition: opacity 240ms ease;
+}
+.dropzone:hover .dz-spotlight {
+  opacity: 1;
+}
+
 .dz-body {
   display: grid;
   gap: 0.5rem;
   justify-items: center;
 }
-.dz-icon {
-  color: #242b3a;
+.dz-icon-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
   margin-bottom: 0.4rem;
-  transition: color 180ms ease;
+  animation: float-bob 4.5s ease-in-out infinite;
+}
+.dropzone:hover .dz-icon-wrap,
+.dropzone.over .dz-icon-wrap {
+  animation-play-state: paused;
+}
+.dz-pulse {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid #b8f060;
+  opacity: 0;
+  pointer-events: none;
+}
+.dropzone:hover .dz-pulse,
+.dropzone.over .dz-pulse {
+  animation: dz-ripple 1.9s ease-out infinite;
+}
+.dropzone:hover .dz-pulse--2,
+.dropzone.over .dz-pulse--2 {
+  animation-delay: 0.95s;
+}
+.dz-icon {
+  position: relative;
+  color: #242b3a;
+  transition:
+    color 220ms ease,
+    transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .dropzone:hover .dz-icon,
 .dropzone.over .dz-icon {
   color: #b8f060;
+  transform: scale(1.1);
 }
 .dz-label {
   font-size: 0.95rem;
   font-weight: 500;
   color: #7a86a0;
+  transition: color 220ms ease;
+}
+.dropzone:hover .dz-label,
+.dropzone.over .dz-label {
+  color: #cdd6e6;
 }
 .dz-hint {
   font-size: 0.8rem;
   color: #2e3548;
+  transition: color 220ms ease;
+}
+.dropzone:hover .dz-hint,
+.dropzone.over .dz-hint {
+  color: #5a647c;
 }
 
 .upload-footer {
@@ -1218,13 +1424,13 @@ video {
   min-width: 0;
   padding-bottom: 2px;
   scrollbar-width: thin;
-  scrollbar-color: #1c2234 transparent;
+  scrollbar-color: #b8f060 transparent;
 }
 .style-presets::-webkit-scrollbar {
   height: 5px;
 }
 .style-presets::-webkit-scrollbar-thumb {
-  background: #1c2234;
+  background: #b8f060;
   border-radius: 999px;
 }
 .preset {
@@ -1478,14 +1684,63 @@ video {
   overflow: hidden;
 }
 .sidebar-head {
-  padding: 0.7rem 0.7rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
   border-bottom: 1px solid #141820;
 }
 .lang-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  padding-bottom: 0.7rem;
+  flex: 1;
+  min-width: 0;
+}
+.lang-add {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.lang-add-select {
+  background: #0e1118;
+  border: 1px solid #1c2234;
+  border-radius: 7px;
+  color: #8490a8;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.lang-add-select:hover:not(:disabled) {
+  color: #c3cbdd;
+  border-color: #2e3a52;
+}
+.lang-add-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.lang-add-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: #8490a8;
+  white-space: nowrap;
+}
+.lang-add-status[data-kind="error"] {
+  color: #f0a0a0;
+}
+.lang-add-status[data-kind="busy"]::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid #2e3a52;
+  border-top-color: #b8f060;
+  animation: spin 0.7s linear infinite;
 }
 .tab {
   background: #0e1118;
@@ -1521,7 +1776,7 @@ video {
   width: 8px;
 }
 .seg-list::-webkit-scrollbar-thumb {
-  background: #1c2234;
+  background: #b8f060;
   border-radius: 8px;
 }
 
@@ -1773,7 +2028,7 @@ video {
   height: 9px;
 }
 .timeline-scroll::-webkit-scrollbar-thumb {
-  background: #1c2234;
+  background: #b8f060;
   border-radius: 8px;
 }
 .timeline-track {
@@ -1972,6 +2227,108 @@ video {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+@keyframes word-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.55em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes mark-shimmer {
+  0%,
+  18% {
+    background-position: 130% 0;
+  }
+  60%,
+  100% {
+    background-position: -130% 0;
+  }
+}
+@keyframes underline-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes badge-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(184, 240, 96, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(184, 240, 96, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(184, 240, 96, 0);
+  }
+}
+@keyframes float-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes dz-ripple {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+@keyframes aurora-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes aurora-drift {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
+  }
+  to {
+    transform: translate(-46%, -54%) rotate(8deg) scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-aurora::before,
+  .hero-badge,
+  .hero-badge-dot,
+  .hero-word,
+  .hero-mark,
+  .hero-mark-text,
+  .hero-sub,
+  .dropzone,
+  .dz-icon-wrap,
+  .dz-pulse {
+    animation: none !important;
+  }
+  .hero-badge,
+  .hero-word,
+  .hero-mark,
+  .hero-sub,
+  .dropzone {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .stage-aurora::before {
+    opacity: 1 !important;
+  }
+  .hero-mark-text {
+    -webkit-text-fill-color: #f4f7fc;
+    color: #f4f7fc;
+  }
+  .hero-underline path {
+    stroke-dashoffset: 0;
+    animation: none !important;
   }
 }
 

@@ -4,10 +4,31 @@ import Footer from "./Footer.astro"
 ---
 
 <section id="stage-upload" class="stage-upload">
+  <div class="stage-aurora" aria-hidden="true"></div>
+
   <div class="hero">
-    <h1>
-      Subtitles for
-      <span class="hero-mark">any&nbsp;video</span>
+    <span class="hero-badge">
+      <span class="hero-badge-dot"></span>
+      Runs 100% in your browser
+    </span>
+    <h1 class="hero-title">
+      <span class="hero-word">Subtitles</span>
+      <span class="hero-word">for</span>
+      <span class="hero-mark">
+        <svg
+          class="hero-underline"
+          viewBox="0 0 300 12"
+          preserveAspectRatio="none"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            pathLength="1"
+            d="M3 8C58 3 116 11 168 6S260 3 297 7"
+          ></path>
+        </svg>
+        <span class="hero-mark-text">any&nbsp;video</span>
+      </span>
     </h1>
     <p class="hero-sub">
       Generate, edit and translate subtitles with AI. Without uploading
@@ -23,8 +44,13 @@ import Footer from "./Footer.astro"
     aria-label="Select or drop a video"
   >
     <input id="video-input" type="file" accept="video/*" hidden />
+    <span class="dz-spotlight" aria-hidden="true"></span>
     <div class="dz-body">
-      <DropzoneIcon class="dz-icon" />
+      <span class="dz-icon-wrap">
+        <span class="dz-pulse" aria-hidden="true"></span>
+        <span class="dz-pulse dz-pulse--2" aria-hidden="true"></span>
+        <DropzoneIcon class="dz-icon" />
+      </span>
       <strong class="dz-label">Drop your video</strong>
       <span class="dz-hint"
         >or click to browse &nbsp;&middot;&nbsp; MP4, MOV, WebM, MKV</span
@@ -34,3 +60,14 @@ import Footer from "./Footer.astro"
 
   <Footer />
 </section>
+
+<script>
+  const dropzone = document.getElementById("dropzone")
+  if (dropzone && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    dropzone.addEventListener("pointermove", (event) => {
+      const rect = dropzone.getBoundingClientRect()
+      dropzone.style.setProperty("--mx", `${event.clientX - rect.left}px`)
+      dropzone.style.setProperty("--my", `${event.clientY - rect.top}px`)
+    })
+  }
+</script>

@@ -177,6 +177,8 @@ const ui = {
   outputLang: $<HTMLSelectElement>("#output-lang"),
   configBackBtn: $("#config-back-btn"),
   langTabs: $("#lang-tabs"),
+  langAddSelect: $<HTMLSelectElement>("#lang-add-select"),
+  langAddStatus: $("#lang-add-status"),
   segList: $("#seg-list"),
   segCount: $("#seg-count"),
   addSegBtn: $<HTMLButtonElement>("#add-seg-btn"),
@@ -333,7 +335,9 @@ let redoStack = []
 let textEditSnapshot = null
 
 function snapshotSegments() {
-  return JSON.stringify(segmentsByLang)
+  // Capture the full editable state: per-language segments plus the language
+  // list/selection, so adding or removing a language is undoable too.
+  return JSON.stringify({ segmentsByLang, orderedLangs, activeLang })
 }
 
 function refreshHistoryButtons() {
@@ -357,11 +361,13 @@ function pushHistory(snapshotBefore) {
 }
 
 function restoreSnapshot(json) {
-  segmentsByLang = JSON.parse(json)
-  if (!segmentsByLang[activeLang]) {
-    const langs = Object.keys(segmentsByLang)
-    if (langs.length) activeLang = langs[0]
-  }
+  const snap = JSON.parse(json)
+  segmentsByLang = snap.segmentsByLang || {}
+  orderedLangs = snap.orderedLangs || Object.keys(segmentsByLang)
+  activeLang = snap.activeLang || orderedLangs[0] || ""
+  if (!segmentsByLang[activeLang])
+    activeLang = orderedLangs[0] || Object.keys(segmentsByLang)[0] || ""
+  renderTabs() // rebuilds tabs + the "add language" select
   renderSegments() // also re-renders the timeline
   enableExports(true)
   updateCaption()
@@ -1303,6 +1309,67 @@ function renderTabs() {
     })
     ui.langTabs.appendChild(tab)
   })
+  populateAddLang()
+}
+
+// ── Add a subtitle language from the editor (translate without going back) ──
+let translatingLang = ""
+
+function populateAddLang() {
+  if (!ui.langAddSelect) return
+  const remaining = Object.entries(LANGS).filter(
+    ([code]) => !orderedLangs.includes(code),
+  )
+  ui.langAddSelect.innerHTML = '<option value="">+ Add language</option>'
+  remaining.forEach(([code, { label }]) => {
+    const opt = document.createElement("option")
+    opt.value = code
+    opt.textContent = label
+    ui.langAddSelect.appendChild(opt)
+  })
+  ui.langAddSelect.value = ""
+  ui.langAddSelect.disabled =
+    !!translatingLang || orderedLangs.length === 0 || remaining.length === 0
+}
+
+function setLangAddStatus(message, kind = "ok") {
+  if (!ui.langAddStatus) return
+  ui.langAddStatus.textContent = message
+  ui.langAddStatus.dataset.kind = kind
+  ui.langAddStatus.hidden = !message
+}
+
+async function addLanguage(target) {
+  if (translatingLang || !LANGS[target] || orderedLangs.includes(target)) return
+  // Translate from the (possibly edited) source-language track so timings and
+  // edits carry over, falling back to the original transcription.
+  const source =
+    detectedLang && LANGS[detectedLang] ? detectedLang : orderedLangs[0]
+  const sourceSegs = segmentsByLang[source] || baseSegments
+  if (!sourceSegs?.length) return
+
+  translatingLang = target
+  if (ui.langAddSelect) ui.langAddSelect.disabled = true
+  setLangAddStatus(`Translating to ${LANGS[target].label}…`, "busy")
+  try {
+    const translated = await translateSegments(sourceSegs, source, target)
+    const before = snapshotSegments()
+    segmentsByLang[target] = translated
+    orderedLangs = [...orderedLangs, target]
+    activeLang = target
+    pushHistory(before)
+    setLangAddStatus("", "ok")
+    renderTabs()
+    renderSegments()
+    enableExports(true)
+    updateCaption()
+  } catch (error) {
+    console.error(error)
+    setLangAddStatus("Translation failed.", "error")
+  } finally {
+    translatingLang = ""
+    populateAddLang()
+  }
 }
 
 function renderSegments() {
@@ -1835,6 +1902,8 @@ function handleSelectedFile(file) {
   orderedLangs = []
   activeLang = ""
   ui.langTabs.innerHTML = ""
+  setLangAddStatus("")
+  populateAddLang()
   renderSegments()
   ui.addSegBtn.disabled = true
   enableExports(false)
@@ -1865,6 +1934,9 @@ function resetFlow() {
   segmentsByLang = {}
   orderedLangs = []
   activeLang = ""
+  ui.langTabs.innerHTML = ""
+  setLangAddStatus("")
+  populateAddLang()
   ui.caption.textContent = ""
   ui.video.removeAttribute("src")
   ui.video.load()
@@ -2577,6 +2649,10 @@ ui.transcribeBtn.addEventListener("click", generate)
 ui.backBtn.addEventListener("click", backToConfig)
 ui.undoBtn?.addEventListener("click", undo)
 ui.redoBtn?.addEventListener("click", redo)
+ui.langAddSelect?.addEventListener("change", () => {
+  const target = ui.langAddSelect.value
+  if (target) addLanguage(target)
+})
 ui.configBackBtn.addEventListener("click", resetFlow)
 ui.downloadSrtBtn.addEventListener("click", downloadSrt)
 ui.downloadVideoBtn.addEventListener("click", downloadVideo)
