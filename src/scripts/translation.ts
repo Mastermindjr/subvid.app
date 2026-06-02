@@ -3,7 +3,170 @@ import {
   resolveTranslationBackend,
   translateCuesBuiltIn,
 } from "@/scripts/builtInTranslate.ts"
-import { LANGS, TRANSLATION_MODEL } from "@/scripts/languages.ts"
+import {
+  LANGS,
+  MARIAN_TRANSLATION_MODELS,
+  TRANSLATION_MODEL,
+} from "@/scripts/languages.ts"
+
+const BRACKETED_SOUND_TRANSLATIONS: Record<string, Record<string, string>> = {
+  es: {
+    APPLAUSE: "APLAUSOS",
+    CLAPPING: "APLAUSOS",
+    LAUGHTER: "RISAS",
+    LAUGHING: "RISAS",
+    MUSIC: "MUSICA",
+    CHEERING: "VITORES",
+    SILENCE: "SILENCIO",
+    NOISE: "RUIDO",
+    "BACKGROUND NOISE": "RUIDO DE FONDO",
+    INAUDIBLE: "INAUDIBLE",
+    SIGH: "SUSPIRO",
+    COUGH: "TOS",
+    COUGHING: "TOS",
+    CRYING: "LLANTO",
+    GASP: "JADEO",
+    BEEP: "PITIDO",
+    WHISTLE: "SILBIDO",
+  },
+}
+
+const BRACKETED_CUE_PATTERN = /\[([^\[\]]{1,80})\]/g
+const MARIAN_BATCH_SIZE = 48
+const NLLB_BATCH_SIZE = 32
+const REPEATED_TRAILING_SYMBOLS = /(?:[^\p{L}\p{N}\s])(?:\s*[^\p{L}\p{N}\s]){3,}\s*$/u
+const TRANSLATION_DEBUG = import.meta.env.DEV
+const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator
+
+type TranslationBackend = "prompt" | "marian" | "nllb"
+
+function soundCueKey(label: string) {
+  return label
+    .trim()
+    .replace(/^[\s.!?¡¿…]+|[\s.!?¡¿…]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toUpperCase()
+}
+
+function translatedSoundCueLabels(text: string, targetLang: string) {
+  const glossary = BRACKETED_SOUND_TRANSLATIONS[targetLang]
+  if (!glossary) return []
+
+  const labels: string[] = []
+  for (const match of text.matchAll(BRACKETED_CUE_PATTERN)) {
+    const translated = glossary[soundCueKey(match[1])]
+    if (translated) labels.push(translated)
+  }
+  return labels
+}
+
+function translateBracketedSoundCues(text: string, targetLang: string) {
+  const glossary = BRACKETED_SOUND_TRANSLATIONS[targetLang]
+  if (!glossary) return text
+
+  return text.replace(BRACKETED_CUE_PATTERN, (match, label) => {
+    const translated = glossary[soundCueKey(label)]
+    return translated ? `[${translated}]` : match
+  })
+}
+
+function enforceBracketedSoundCues(
+  translatedText: string,
+  sourceText: string,
+  targetLang: string,
+) {
+  const expectedLabels = translatedSoundCueLabels(sourceText, targetLang)
+  if (!expectedLabels.length) return translatedText
+
+  let labelIndex = 0
+  const text = translatedText.replace(BRACKETED_CUE_PATTERN, (match) => {
+    const label = expectedLabels[labelIndex]
+    if (!label) return match
+    labelIndex += 1
+    return `[${label}]`
+  })
+
+  if (labelIndex >= expectedLabels.length) return text
+
+  const missingLabels = expectedLabels
+    .slice(labelIndex)
+    .map((label) => `[${label}]`)
+    .join(" ")
+  return `${text.trimEnd()} ${missingLabels}`.trim()
+}
+
+function cleanTranslationArtifacts(text: string) {
+  let cleaned = String(text || "").trim()
+  let previous = ""
+  while (cleaned && cleaned !== previous) {
+    previous = cleaned
+    cleaned = cleaned.replace(REPEATED_TRAILING_SYMBOLS, "").trimEnd()
+  }
+  return cleaned
+}
+
+function marianGenerationOptions(texts: string[]) {
+  const maxChars = texts.reduce(
+    (max, text) => Math.max(max, String(text || "").length),
+    0,
+  )
+  const maxNewTokens = Math.max(24, Math.min(80, Math.ceil(maxChars / 3) + 12))
+  return {
+    do_sample: false,
+    max_new_tokens: maxNewTokens,
+    no_repeat_ngram_size: 3,
+    num_beams: 1,
+    repetition_penalty: 1.15,
+  }
+}
+
+function rawTranslationText(value: any, fallback = "") {
+  if (value == null) return fallback
+  if (typeof value === "string") return value
+  return value.translation_text || value.generated_text || JSON.stringify(value)
+}
+
+function logLocalTranslationBatch({
+  backend,
+  sourceLang,
+  targetLang,
+  batchNumber,
+  totalBatches,
+  input,
+  raw,
+  output,
+  generation,
+}: {
+  backend: "marian" | "nllb"
+  sourceLang: string
+  targetLang: string
+  batchNumber?: number
+  totalBatches?: number
+  input: string[]
+  raw: any
+  output: string[]
+  generation?: Record<string, unknown>
+}) {
+  if (!TRANSLATION_DEBUG) return
+
+  const rawItems = Array.isArray(raw) ? raw : [raw]
+  const suffix =
+    batchNumber && totalBatches ? ` batch ${batchNumber}/${totalBatches}` : ""
+  console.groupCollapsed(
+    `[translate:${backend}] ${sourceLang} -> ${targetLang}${suffix}`,
+  )
+  if (generation) console.debug("generation", generation)
+  console.table(
+    input.map((text, index) => ({
+      index,
+      input: text,
+      raw: rawTranslationText(rawItems[index], text),
+      output: output[index],
+    })),
+  )
+  console.debug("raw result", raw)
+  console.groupEnd()
+}
 
 type TranslationServiceOptions = {
   downloads: any
@@ -23,10 +186,12 @@ type TranslationServiceOptions = {
 
 export function createTranslationService(options: TranslationServiceOptions) {
   let translationReady = false
-  let activeTranslationBackend: "prompt" | "nllb" | null = null
+  let activeTranslationBackend: TranslationBackend | null = null
+  let activeTranslationModel = ""
 
   function markTranslationBuiltIn() {
     activeTranslationBackend = "prompt"
+    activeTranslationModel = builtInBackendLabel()
     translationReady = true
     const item = options.downloads.translation
     item.readyNote = options.tt("downloads.translationBuiltin", {
@@ -37,43 +202,222 @@ export function createTranslationService(options: TranslationServiceOptions) {
     options.updateDownloadStatus("translation", "ready")
   }
 
-  async function ensureNllbTranslator() {
-    if (translationReady && activeTranslationBackend === "nllb") return
-    activeTranslationBackend = "nllb"
+  async function ensureTransformersTranslator(
+    backend: Exclude<TranslationBackend, "prompt">,
+    model: string,
+    requireWebGPU = false,
+  ) {
+    if (
+      translationReady &&
+      activeTranslationBackend === backend &&
+      activeTranslationModel === model
+    ) {
+      return
+    }
+
+    activeTranslationBackend = backend
+    activeTranslationModel = model
     options.updateDownloadStatus("translation", "downloading")
     options.downloads.translation.readyNote = ""
     await options.transformersClient.call("ensure-translation", {
-      model: TRANSLATION_MODEL,
+      backend,
+      model,
+      webgpu: hasWebGPU,
+      requireWebGPU,
     })
     translationReady = true
     options.updateDownloadStatus("translation", "ready")
   }
 
+  function marianModelForPair(sourceLang: string, targetLang: string) {
+    return MARIAN_TRANSLATION_MODELS[`${sourceLang}:${targetLang}`]
+  }
+
+  async function ensureNllbTranslator() {
+    await ensureTransformersTranslator("nllb", TRANSLATION_MODEL)
+  }
+
+  async function ensureMarianTranslator(sourceLang: string, targetLang: string) {
+    const model = marianModelForPair(sourceLang, targetLang)
+    if (!model || !hasWebGPU) return false
+    await ensureTransformersTranslator("marian", model, true)
+    return true
+  }
+
   async function ensureTranslation(sourceLang: string, targetLang: string) {
     const backend = await resolveTranslationBackend(sourceLang, targetLang)
-    if (backend !== "nllb") {
+    if (backend === "prompt") {
       options.updateDownloadStatus("translation", "downloading")
       options.downloads.translation.readyNote = ""
       return backend
     }
+    if (backend === "marian") {
+      try {
+        if (await ensureMarianTranslator(sourceLang, targetLang)) return "marian"
+      } catch (err) {
+        console.warn("[translate] MarianMT failed to load, falling back to NLLB", err)
+      }
+    }
+
     await ensureNllbTranslator()
     return "nllb"
   }
 
-  async function translateWithNllb(texts: string[], sourceLang: string, targetLang: string) {
+  function normalizeNllbTranslations(translated: any, fallbackTexts: string[]) {
+    const normalized = Array.isArray(translated) ? translated : [translated]
+    return fallbackTexts.map((text, i) =>
+      cleanTranslationArtifacts(rawTranslationText(normalized[i], text)),
+    )
+  }
+
+  async function translateNllbBatch(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+    batchNumber?: number,
+    totalBatches?: number,
+  ) {
     const translated: any = await options.transformersClient.call("translate", {
       texts,
       src: (LANGS as any)[sourceLang].nllb,
       tgt: (LANGS as any)[targetLang].nllb,
     })
-    const normalized = Array.isArray(translated) ? translated : [translated]
-    return texts.map((text, i) =>
-      (
-        normalized[i]?.translation_text ||
-        normalized[i]?.generated_text ||
-        text
-      ).trim(),
+    const output = normalizeNllbTranslations(translated, texts)
+    logLocalTranslationBatch({
+      backend: "nllb",
+      sourceLang,
+      targetLang,
+      batchNumber,
+      totalBatches,
+      input: texts,
+      raw: translated,
+      output,
+    })
+    return output
+  }
+
+  async function translateMarianBatch(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+    batchNumber?: number,
+    totalBatches?: number,
+  ) {
+    const generation = marianGenerationOptions(texts)
+    const translated: any = await options.transformersClient.call("translate", {
+      backend: "marian",
+      generation,
+      texts,
+    })
+    const output = normalizeNllbTranslations(translated, texts)
+    logLocalTranslationBatch({
+      backend: "marian",
+      sourceLang,
+      targetLang,
+      batchNumber,
+      totalBatches,
+      input: texts,
+      raw: translated,
+      output,
+      generation,
+    })
+    return output
+  }
+
+  async function translateWithBatches(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+    batchSize: number,
+    translateBatch: (
+      batch: string[],
+      batchNumber: number,
+      totalBatches: number,
+    ) => Promise<string[]>,
+  ) {
+    const translatedTexts: string[] = []
+    const totalBatches = Math.max(1, Math.ceil(texts.length / batchSize))
+
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize)
+      const batchNumber = Math.floor(i / batchSize) + 1
+      options.setStatus(
+        options.tt("steps.translatingBatch", {
+          lang: options.langName(targetLang),
+          current: batchNumber,
+          total: totalBatches,
+        }),
+        "busy",
+      )
+      translatedTexts.push(...(await translateBatch(batch, batchNumber, totalBatches)))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    return translatedTexts
+  }
+
+  async function translateWithNllb(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+  ) {
+    await ensureNllbTranslator()
+    return translateWithBatches(texts, sourceLang, targetLang, NLLB_BATCH_SIZE, (
+      batch,
+      batchNumber,
+      totalBatches,
+    ) =>
+      translateNllbBatch(
+        batch,
+        sourceLang,
+        targetLang,
+        batchNumber,
+        totalBatches,
+      ),
     )
+  }
+
+  async function translateWithMarian(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+  ) {
+    if (!(await ensureMarianTranslator(sourceLang, targetLang))) {
+      throw new Error("MarianMT is unavailable for this language pair")
+    }
+    return translateWithBatches(texts, sourceLang, targetLang, MARIAN_BATCH_SIZE, (
+      batch,
+      batchNumber,
+      totalBatches,
+    ) =>
+      translateMarianBatch(
+        batch,
+        sourceLang,
+        targetLang,
+        batchNumber,
+        totalBatches,
+      ),
+    )
+  }
+
+  async function translateWithLocalFallback(
+    texts: string[],
+    sourceLang: string,
+    targetLang: string,
+    preferMarian = true,
+  ) {
+    if (preferMarian && marianModelForPair(sourceLang, targetLang) && hasWebGPU) {
+      try {
+        return await translateWithMarian(texts, sourceLang, targetLang)
+      } catch (err) {
+        console.warn("[translate] MarianMT failed, falling back to NLLB", err)
+      }
+    }
+    options.setStatus(
+      options.tt("steps.translatingTo", { lang: options.langName(targetLang) }),
+      "busy",
+    )
+    return translateWithNllb(texts, sourceLang, targetLang)
   }
 
   async function translateSegments(
@@ -91,39 +435,73 @@ export function createTranslationService(options: TranslationServiceOptions) {
       "busy",
     )
 
-    const cues = segments.map((s) => ({
-      text: s.text,
+    const preparedTexts = segments.map((s) =>
+      translateBracketedSoundCues(s.text, targetLang),
+    )
+    const cues = segments.map((s, i) => ({
+      text: preparedTexts[i],
       start: s.start,
       end: s.end,
     }))
-    const texts = segments.map((s) => s.text)
     const backend = await ensureTranslation(sourceLang, targetLang)
 
     let translatedTexts
     if (backend === "nllb") {
-      translatedTexts = await translateWithNllb(texts, sourceLang, targetLang)
+      translatedTexts = await translateWithNllb(
+        preparedTexts,
+        sourceLang,
+        targetLang,
+      )
+    } else if (backend === "marian") {
+      translatedTexts = await translateWithLocalFallback(
+        preparedTexts,
+        sourceLang,
+        targetLang,
+      )
     } else {
       const onModelProgress = (ratio: number) => {
-        options.downloads.translation.progress = Math.round(ratio * 100)
+        options.downloads.translation.progress = Math.min(99, Math.round(ratio * 100))
         options.renderDownloads()
       }
       try {
         translatedTexts = await translateCuesBuiltIn(cues, sourceLang, targetLang, {
           onProgress: onModelProgress,
+          onReady: markTranslationBuiltIn,
+          onBatch: (current: number, total: number) => {
+            options.setStatus(
+              options.tt("steps.translatingBatch", {
+                lang: options.langName(targetLang),
+                current,
+                total,
+              }),
+              "busy",
+            )
+          },
           sourceLabel: (LANGS as any)[sourceLang].label,
           targetLabel: (LANGS as any)[targetLang].label,
         })
         markTranslationBuiltIn()
       } catch (err) {
         console.warn("[translate] built-in failed, falling back to NLLB", err)
-        await ensureNllbTranslator()
-        translatedTexts = await translateWithNllb(texts, sourceLang, targetLang)
+        options.setStatus(options.tt("steps.translationFallback"), "busy")
+        translatedTexts = await translateWithLocalFallback(
+          preparedTexts,
+          sourceLang,
+          targetLang,
+        )
       }
     }
 
     return segments.map((s, i) => ({
       ...s,
-      text: (translatedTexts[i] || s.text).trim(),
+      text:
+        cleanTranslationArtifacts(
+          enforceBracketedSoundCues(
+            translatedTexts[i] || s.text,
+            s.text,
+            targetLang,
+          ),
+        ) || s.text,
     }))
   }
 

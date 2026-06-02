@@ -46,6 +46,14 @@ const t = useTranslations(Astro.currentLocale)
         </span>
       </label>
 
+      <label class="option-field">
+        <input id="word-animation" type="checkbox" aria-describedby="word-animation-hint" />
+        <span class="option-copy">
+          <strong>{t.config.wordAnimation}</strong>
+          <small id="word-animation-hint">{t.config.wordAnimationHint}</small>
+        </span>
+      </label>
+
       <button id="transcribe-btn" class="btn-primary btn-block" type="button">
         {t.config.generate}
       </button>

@@ -60,6 +60,9 @@ export const ui = {
       dualTrack: "Show transcription and subtitles",
       dualTrackHint:
         "Keep the detected original text next to the translated subtitles.",
+      wordAnimation: "Animate by word",
+      wordAnimationHint:
+        "More precise karaoke-style timing, but Whisper takes longer.",
       generate: "Generate subtitles",
       preparing: "Preparing\u2026",
     },
@@ -175,10 +178,15 @@ export const ui = {
         transcribing: "Step 4/5 \u00B7 Transcribing\u2026",
         buildingLines: "Step 5/5 \u00B7 Building subtitle lines\u2026",
         translatingTo: "Step 5/5 \u00B7 Translating to {lang}\u2026",
+        translatingBatch:
+          "Step 5/5 \u00B7 Translating to {lang}\u2026 batch {current}/{total}",
+        translationFallback:
+          "Chrome translation is taking too long. Loading the local translation model\u2026",
       },
       noSpeech: "No speech detected in the video.",
       genError: "Error during generation.",
       ready: "Ready \u00B7 {n} lines \u00B7 {count} language(s).",
+      generatedIn: "Generated in {time}",
       videoLoaded: "Video loaded.",
       translationFailed: "Translation failed.",
       translatingTo: "Translating to {lang}\u2026",
@@ -295,6 +303,9 @@ export const ui = {
       dualTrack: "Mostrar transcripción y subtítulos",
       dualTrackHint:
         "Mantén el texto original detectado junto a los subtítulos traducidos.",
+      wordAnimation: "Animar por palabra",
+      wordAnimationHint:
+        "Timing más preciso estilo karaoke, pero Whisper tarda más.",
       generate: "Generar subtítulos",
       preparing: "Preparando\u2026",
     },
@@ -411,10 +422,15 @@ export const ui = {
         transcribing: "Paso 4/5 \u00B7 Transcribiendo\u2026",
         buildingLines: "Paso 5/5 \u00B7 Creando las líneas de subtítulos\u2026",
         translatingTo: "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026",
+        translatingBatch:
+          "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026 lote {current}/{total}",
+        translationFallback:
+          "La traducción de Chrome está tardando demasiado. Cargando el modelo local de traducción\u2026",
       },
       noSpeech: "No se detectó voz en el vídeo.",
       genError: "Error durante la generación.",
       ready: "Listo \u00B7 {n} líneas \u00B7 {count} idioma(s).",
+      generatedIn: "Generado en {time}",
       videoLoaded: "Vídeo cargado.",
       translationFailed: "Error de traducción.",
       translatingTo: "Traduciendo a {lang}\u2026",

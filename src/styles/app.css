@@ -1325,10 +1325,23 @@ body {
   cursor: not-allowed;
 }
 .video-meta {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.8rem;
   color: #404858;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.generation-time {
+  flex: 0 0 auto;
+  padding: 0.28rem 0.58rem;
+  border: 1px solid rgba(184, 240, 96, 0.14);
+  border-radius: 999px;
+  background: rgba(184, 240, 96, 0.06);
+  color: #9fcb66;
+  font-size: 0.72rem;
+  font-weight: 600;
   white-space: nowrap;
 }
 

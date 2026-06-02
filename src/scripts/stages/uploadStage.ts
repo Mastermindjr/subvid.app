@@ -147,9 +147,12 @@ export function createUploadStageController({
     ui.addSegBtn.disabled = true
     enableExports(false)
     resetHistory()
+    ui.generationTime.hidden = true
+    ui.generationTime.textContent = ""
 
     ui.outputLang.value = "same"
     ui.inputLang.value = ""
+    ui.wordAnimation.checked = false
 
     const metaText = `${file.name} · ${prettifyBytes(file.size)}`
     ui.meta.textContent = metaText
@@ -174,6 +177,8 @@ export function createUploadStageController({
     setSelectedVideoFile(null)
     resetEditorState()
     ui.langTabs.innerHTML = ""
+    ui.generationTime.hidden = true
+    ui.generationTime.textContent = ""
     setLangAddStatus("")
     populateAddLang()
     ui.caption.textContent = ""

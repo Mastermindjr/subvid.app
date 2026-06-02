@@ -129,6 +129,20 @@ export function createConfigStageController({
     stopProgressCreep,
   })
 
+  function logGeneration(event: string, details: Record<string, unknown> = {}) {
+    console.info(`[generate] ${event}`, details)
+  }
+
+  function formatElapsed(ms: number) {
+    const totalSeconds = Math.max(0, Math.round(ms / 1000))
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+    if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`
+    if (minutes) return `${minutes}m ${String(seconds).padStart(2, "0")}s`
+    return `${seconds}s`
+  }
+
   function outputTarget(sourceLang: string) {
     const value = ui.outputLang.value
     if (!value || value === "same") return sourceLang
@@ -180,12 +194,31 @@ export function createConfigStageController({
     ui.downloadSrtBtn.disabled = true
     ui.configError.hidden = true
     ui.configError.textContent = ""
+    ui.generationTime.hidden = true
+    ui.generationTime.textContent = ""
     ui.configProgress.hidden = false
     setStatus(tt("steps.preparing"), "busy")
     setProgress(2)
+    const generationStartedAt = performance.now()
+    logGeneration("start", {
+      fileSize: file.size,
+      fileType: file.type || "unknown",
+      inputLang: ui.inputLang.value || "auto",
+      outputLang: ui.outputLang.value || "same",
+      wordAnimation: ui.wordAnimation.checked,
+      webgpu: hasWebGPU,
+    })
 
     try {
+      const extractStartedAt = performance.now()
       const audio = await extractAudioBuffer(file)
+      const audioSeconds = audio.length / 16000
+      logGeneration("audio:ready", {
+        audioSeconds: Math.round(audioSeconds),
+        samples: audio.length,
+        elapsedMs: Math.round(performance.now() - extractStartedAt),
+        totalElapsedMs: Math.round(performance.now() - generationStartedAt),
+      })
       setStatus(tt("steps.loadingSpeech"), "busy")
       startProgressCreep(38, 48, 8000)
 
@@ -202,7 +235,14 @@ export function createConfigStageController({
       }, 200)
 
       try {
+        const recognizerStartedAt = performance.now()
+        logGeneration("recognizer:start", { cached: asrReady })
         await ensureRecognizer()
+        logGeneration("recognizer:ready", {
+          cached: asrReady,
+          elapsedMs: Math.round(performance.now() - recognizerStartedAt),
+          totalElapsedMs: Math.round(performance.now() - generationStartedAt),
+        })
       } finally {
         clearInterval(asrMonitor)
         stopProgressCreep()
@@ -211,7 +251,6 @@ export function createConfigStageController({
 
       const TR_START = 48
       const TR_END = 90
-      const audioSeconds = audio.length / 16000
       const chunkSeconds = 30 - 2 * 5
       const totalChunks = Math.max(1, Math.ceil(audioSeconds / chunkSeconds))
       const chunkSpan = (TR_END - TR_START) / totalChunks
@@ -226,6 +265,12 @@ export function createConfigStageController({
       transcribeStatus()
       applyProgress(TR_START)
       startProgressCreep(TR_START, TR_START + chunkSpan, perChunkMs)
+      const transcribeStartedAt = performance.now()
+      logGeneration("transcription:start", {
+        audioSeconds: Math.round(audioSeconds),
+        estimatedChunks: totalChunks,
+        language: ui.inputLang.value || "auto",
+      })
 
       transformersClient.setChunkHandler(() => {
         const now = performance.now()
@@ -239,29 +284,50 @@ export function createConfigStageController({
         applyProgress(floor)
         if (chunksDone < totalChunks)
           startProgressCreep(floor, ceiling, perChunkMs)
+        logGeneration("transcription:chunk", {
+          chunk: chunksDone,
+          estimatedChunks: totalChunks,
+          elapsedMs: Math.round(now - transcribeStartedAt),
+        })
       })
 
       let output: any
       try {
         output = await transformersClient.call(
           "transcribe",
-          { audio, language: ui.inputLang.value || null },
+          {
+            audio,
+            language: ui.inputLang.value || null,
+            wordTimestamps: ui.wordAnimation.checked,
+          },
           [audio.buffer],
         )
       } finally {
         transformersClient.setChunkHandler(null)
       }
+      logGeneration("transcription:done", {
+        chunks: chunksDone,
+        elapsedMs: Math.round(performance.now() - transcribeStartedAt),
+        totalElapsedMs: Math.round(performance.now() - generationStartedAt),
+      })
 
       stopProgressCreep()
       setProgress(TR_END)
       setStatus(tt("steps.buildingLines"), "busy")
       applyProgress(92)
 
+      const normalizeStartedAt = performance.now()
       const detectedLang =
         normalizeLanguageCode(output?.language) ||
         normalizeLanguageCode(ui.inputLang.value) ||
         "en"
       const baseSegments = normalizeSegments(output)
+      logGeneration("segments:ready", {
+        detectedLang,
+        segments: baseSegments.length,
+        elapsedMs: Math.round(performance.now() - normalizeStartedAt),
+        totalElapsedMs: Math.round(performance.now() - generationStartedAt),
+      })
 
       if (!baseSegments.length) throw new Error(tt("noSpeech"))
 
@@ -284,9 +350,15 @@ export function createConfigStageController({
         if (lang === detectedLang) {
           segmentsByLang[lang] = baseSegments.map((segment) => ({ ...segment }))
         } else {
+          const translationStartedAt = performance.now()
+          logGeneration("translation:start", {
+            sourceLang: detectedLang,
+            targetLang: lang,
+            segments: baseSegments.length,
+          })
           startProgressCreep(
             TX_START + (done / targets.length) * TX_SPAN,
-            TX_START + ((done + 1) / targets.length) * TX_SPAN,
+            Math.min(99, TX_START + ((done + 1) / targets.length) * TX_SPAN),
             6000,
           )
           segmentsByLang[lang] = await translateSegments(
@@ -295,6 +367,12 @@ export function createConfigStageController({
             lang,
           )
           stopProgressCreep()
+          logGeneration("translation:done", {
+            sourceLang: detectedLang,
+            targetLang: lang,
+            elapsedMs: Math.round(performance.now() - translationStartedAt),
+            totalElapsedMs: Math.round(performance.now() - generationStartedAt),
+          })
         }
         done += 1
         setProgress(TX_START + (done / targets.length) * TX_SPAN)
@@ -314,6 +392,11 @@ export function createConfigStageController({
       enableExports(true)
       ui.addSegBtn.disabled = false
       resetHistory()
+      const totalElapsedMs = Math.round(performance.now() - generationStartedAt)
+      ui.generationTime.textContent = tt("generatedIn", {
+        time: formatElapsed(totalElapsedMs),
+      })
+      ui.generationTime.hidden = false
       setProgress(100)
       setStatus(
         tt("ready", { n: baseSegments.length, count: targets.length }),
@@ -322,8 +405,17 @@ export function createConfigStageController({
       setStage("editor")
       updateCaption()
       ui.configProgress.hidden = true
+      logGeneration("done", {
+        totalElapsedMs,
+        segments: baseSegments.length,
+        tracks: targets.length,
+      })
     } catch (error: any) {
       console.error(error)
+      console.warn("[generate] failed", {
+        elapsedMs: Math.round(performance.now() - generationStartedAt),
+        error,
+      })
       const message = error?.message || tt("genError")
       setStatus(message, "error")
       setProgress(0)
