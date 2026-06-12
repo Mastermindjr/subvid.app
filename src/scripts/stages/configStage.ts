@@ -194,7 +194,7 @@ export function createConfigStageController({
     })
   }
 
-  const { ensureFfmpeg, extractAudioBuffer } = createAudioService({
+  const { ensureFfmpeg, extractAudioBuffer, remuxAudioToAacLc } = createAudioService({
     tt,
     fetchWithProgress,
     updateDownloadStatus,
@@ -705,5 +705,6 @@ export function createConfigStageController({
     resetTranscriptionCache,
     generate,
     wireConfigStage,
+    remuxAudioToAacLc,
   }
 }
