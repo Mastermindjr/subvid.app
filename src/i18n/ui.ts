@@ -190,6 +190,8 @@ export const ui = {
         loadingSpeech: "Step 4/5 \u00B7 Loading speech model\u2026",
         transcribing: "Step 4/5 \u00B7 Transcribing\u2026",
         buildingLines: "Step 5/5 \u00B7 Building subtitle lines\u2026",
+        downloadingTranslation:
+          "Step 5/5 \u00B7 Downloading translation model\u2026",
         translatingTo: "Step 5/5 \u00B7 Translating to {lang}\u2026",
         translatingBatch:
           "Step 5/5 \u00B7 Translating to {lang}\u2026 batch {current}/{total}",
@@ -464,6 +466,8 @@ export const ui = {
         loadingSpeech: "Paso 4/5 \u00B7 Cargando el modelo de voz\u2026",
         transcribing: "Paso 4/5 \u00B7 Transcribiendo\u2026",
         buildingLines: "Paso 5/5 \u00B7 Creando las líneas de subtítulos\u2026",
+        downloadingTranslation:
+          "Paso 5/5 \u00B7 Descargando el modelo de traducción\u2026",
         translatingTo: "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026",
         translatingBatch:
           "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026 lote {current}/{total}",

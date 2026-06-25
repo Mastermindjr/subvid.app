@@ -90,10 +90,19 @@ const t = useTranslations(Astro.currentLocale)
 <script>
   const dropzone = document.getElementById("dropzone")
   if (dropzone && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    let rafId = 0
+    let pendingX = 0
+    let pendingY = 0
     dropzone.addEventListener("pointermove", (event) => {
-      const rect = dropzone.getBoundingClientRect()
-      dropzone.style.setProperty("--mx", `${event.clientX - rect.left}px`)
-      dropzone.style.setProperty("--my", `${event.clientY - rect.top}px`)
+      pendingX = event.clientX
+      pendingY = event.clientY
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        const rect = dropzone.getBoundingClientRect()
+        dropzone.style.setProperty("--mx", `${pendingX - rect.left}px`)
+        dropzone.style.setProperty("--my", `${pendingY - rect.top}px`)
+      })
     })
   }
 </script>

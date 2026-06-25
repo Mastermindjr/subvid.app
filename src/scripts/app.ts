@@ -77,6 +77,8 @@ const translateSegments = (
   targetLang: string,
 ) => translationService.translateSegments(segments, sourceLang, targetLang);
 
+const isTranslationReady = () => translationService.isTranslationReady()
+
 function currentSegments(): Segment[] {
   return segmentsByLang[activeLang] || [];
 }
@@ -229,6 +231,7 @@ editorSegmentsController = createEditorSegmentsController({
   },
   trackLabel,
   translateSegments,
+  isTranslationReady,
   snapshotSegments,
   pushHistory,
   renderTimeline,

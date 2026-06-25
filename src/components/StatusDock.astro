@@ -7,7 +7,7 @@ const t = useTranslations(Astro.currentLocale)
 ---
 
 <div id="status-dock" class="status-dock">
-  <span id="downloads-label" class="status-label"></span>
+  <span id="downloads-label" class="status-label" role="status" aria-live="polite"></span>
   <button
     id="downloads-toggle"
     class="status-btn"

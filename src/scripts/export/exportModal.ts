@@ -36,8 +36,10 @@ export function createExportModal({ ui, tt, isExporting }: any) {
 
   function setExportProgress(percent: number) {
     const clamped = Math.max(0, Math.min(100, percent))
+    const rounded = Math.round(clamped)
     ui.exportFill.style.width = `${clamped}%`
-    ui.exportPct.textContent = `${Math.round(clamped)}%`
+    ui.exportPct.textContent = `${rounded}%`
+    ui.exportTrack?.setAttribute("aria-valuenow", String(rounded))
   }
 
   function setExportStep(id: string, state: string) {

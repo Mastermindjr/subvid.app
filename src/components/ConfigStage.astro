@@ -60,15 +60,22 @@ const t = useTranslations(Astro.currentLocale)
 
       <div id="config-progress" class="gen-progress" hidden>
         <div class="gen-progress-head">
-          <span id="config-status" class="gen-status">{t.config.preparing}</span>
+          <span id="config-status" class="gen-status" role="status" aria-live="polite">{t.config.preparing}</span>
           <span id="config-progress-pct" class="gen-pct">0%</span>
         </div>
-        <div class="gen-track">
+        <div
+          id="config-progress-track"
+          class="gen-track"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
           <div id="config-progress-fill" class="gen-fill"></div>
         </div>
       </div>
 
-      <p id="config-error" class="gen-error" hidden></p>
+      <p id="config-error" class="gen-error" role="alert" hidden></p>
     </div>
   </div>
 

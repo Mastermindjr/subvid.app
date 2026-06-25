@@ -82,6 +82,22 @@ export function createEditorStageController({
         event.preventDefault()
         if (ui.video.paused) ui.video.play().catch(() => {})
         else ui.video.pause()
+        return
+      }
+
+      if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        !isTextInputTarget(event.target)
+      ) {
+        const duration = ui.video.duration
+        if (!Number.isFinite(duration)) return
+        event.preventDefault()
+        const step = event.shiftKey ? 5 : 1
+        const delta = event.key === "ArrowRight" ? step : -step
+        ui.video.currentTime = Math.max(
+          0,
+          Math.min(duration, (ui.video.currentTime || 0) + delta),
+        )
       }
     }
   }

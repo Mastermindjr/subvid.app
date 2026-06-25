@@ -129,14 +129,20 @@ export function createConfigStageController({
     if (on) stopProgressCreep()
     progressIndeterminate = on
     ui.configProgressFill.classList.toggle("is-indeterminate", on)
+    if (ui.configProgressTrack) {
+      ui.configProgressTrack.setAttribute("aria-busy", on ? "true" : "false")
+      if (on) ui.configProgressTrack.removeAttribute("aria-valuenow")
+    }
     if (on) ui.configProgressPct.textContent = ""
   }
 
   function applyProgress(percent: number) {
     if (progressIndeterminate) return
     const clamped = Math.max(0, Math.min(100, percent))
+    const rounded = Math.round(clamped)
     ui.configProgressFill.style.width = `${clamped}%`
-    ui.configProgressPct.textContent = `${Math.round(clamped)}%`
+    ui.configProgressPct.textContent = `${rounded}%`
+    ui.configProgressTrack?.setAttribute("aria-valuenow", String(rounded))
   }
 
   function stopProgressCreep() {

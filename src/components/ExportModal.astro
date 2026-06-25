@@ -26,9 +26,16 @@ const t = useTranslations(Astro.currentLocale)
       </button>
     </div>
 
-    <p id="export-stage" class="export-stage">{t.export.preparing}</p>
+    <p id="export-stage" class="export-stage" role="status" aria-live="polite">{t.export.preparing}</p>
 
-    <div class="export-track">
+    <div
+      id="export-track"
+      class="export-track"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="0"
+    >
       <div id="export-fill" class="export-fill"></div>
     </div>
     <div class="export-foot">
@@ -38,6 +45,6 @@ const t = useTranslations(Astro.currentLocale)
 
     <ul id="export-steps" class="export-steps"></ul>
 
-    <p id="export-error" class="export-error" hidden></p>
+    <p id="export-error" class="export-error" role="alert" hidden></p>
   </div>
 </div>

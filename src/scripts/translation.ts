@@ -267,6 +267,7 @@ export function createTranslationService(options: TranslationServiceOptions) {
     activeTranslationModel = model
     options.updateDownloadStatus("translation", "downloading")
     options.downloads.translation.readyNote = ""
+    options.setStatus(options.tt("steps.downloadingTranslation"), "busy")
     await options.transformersClient.call("ensure-translation", {
       backend,
       model,
@@ -507,7 +508,12 @@ export function createTranslationService(options: TranslationServiceOptions) {
         targetLang,
       )
     } else {
+      let announcedDownload = false
       const onModelProgress = (ratio: number) => {
+        if (!announcedDownload && ratio < 1) {
+          announcedDownload = true
+          options.setStatus(options.tt("steps.downloadingTranslation"), "busy")
+        }
         options.downloads.translation.progress = Math.min(99, Math.round(ratio * 100))
         options.renderDownloads()
       }
@@ -557,6 +563,7 @@ export function createTranslationService(options: TranslationServiceOptions) {
   return {
     ensureNllbTranslator,
     ensureTranslation,
+    isTranslationReady: () => translationReady,
     translateSegments,
   }
 }

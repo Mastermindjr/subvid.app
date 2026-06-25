@@ -23,6 +23,8 @@ type EditorSegmentsOptions = {
   setSegmentsForLang: (lang: string, segments: any[]) => void
   trackLabel: (lang: string) => string
   translateSegments: (segments: any[], source: string, target: string) => Promise<any[]>
+  /** Whether a translation model is already loaded (false ⇒ a download is pending). */
+  isTranslationReady: () => boolean
   snapshotSegments: () => string
   pushHistory: (snapshotBefore: string) => void
   renderTimeline: () => void
@@ -42,6 +44,7 @@ export function createEditorSegmentsController(options: EditorSegmentsOptions) {
     setSegmentsForLang,
     trackLabel,
     translateSegments,
+    isTranslationReady,
     snapshotSegments,
     pushHistory,
     renderTimeline,
@@ -169,7 +172,26 @@ export function createEditorSegmentsController(options: EditorSegmentsOptions) {
 
     translatingLang = target
     if (ui.langAddSelect) ui.langAddSelect.disabled = true
-    setLangAddStatus(tt("translatingTo", { lang: langName(target) }), "busy")
+
+    const translatingMessage = tt("translatingTo", { lang: langName(target) })
+    const needsDownload = !isTranslationReady()
+    setLangAddStatus(
+      needsDownload ? tt("steps.downloadingTranslation") : translatingMessage,
+      "busy",
+    )
+
+    // While the model downloads we keep the "downloading" label; once it's ready
+    // we switch to the translating label so the user understands each phase.
+    let readyWatcher = 0
+    if (needsDownload) {
+      readyWatcher = window.setInterval(() => {
+        if (!isTranslationReady()) return
+        window.clearInterval(readyWatcher)
+        readyWatcher = 0
+        setLangAddStatus(translatingMessage, "busy")
+      }, 200)
+    }
+
     try {
       const translated = await translateSegments(sourceSegs, source, target)
       const before = snapshotSegments()
@@ -186,6 +208,7 @@ export function createEditorSegmentsController(options: EditorSegmentsOptions) {
       console.error(error)
       setLangAddStatus(tt("translationFailed"), "error")
     } finally {
+      if (readyWatcher) window.clearInterval(readyWatcher)
       translatingLang = ""
       populateAddLang()
     }
