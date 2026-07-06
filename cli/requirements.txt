@@ -1,0 +1,13 @@
+# Core
+faster-whisper>=1.1.0
+
+# Local engine server (integrates with the web UI)
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+
+# GPU (NVIDIA, CUDA 12) — cuBLAS + cuDNN runtimes as pip wheels.
+# The CLI adds their DLL folders automatically on Windows.
+# If you only want CPU, you can remove these two lines.
+nvidia-cublas-cu12; platform_system == "Windows" or platform_system == "Linux"
+nvidia-cudnn-cu12>=9; platform_system == "Windows" or platform_system == "Linux"

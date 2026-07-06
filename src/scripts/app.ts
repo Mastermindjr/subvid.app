@@ -6,6 +6,8 @@ import { createExportModal } from "@/scripts/export/exportModal.ts";
 import { createVideoExporter } from "@/scripts/export/videoExport.ts";
 import { baseFileName, prettifyBytes } from "@/scripts/file.ts";
 import { I18N, langName, tt } from "@/scripts/i18n.ts";
+import { detectEngine } from "@/scripts/localEngine.ts";
+import { createBatchPanel } from "@/scripts/stages/batchPanel.ts";
 import { createStageManager } from "@/scripts/stageManager.ts";
 import { createConfigStageController } from "@/scripts/stages/configStage.ts";
 import { createEditorStageController } from "@/scripts/stages/editorStage.ts";
@@ -382,6 +384,7 @@ const { downloadVideo } = createVideoExporter({
   setStatus: configStageController.setStatus,
   modal: exportModal,
   remuxAudioToAacLc: configStageController.remuxAudioToAacLc,
+  muxSubtitleTracks: configStageController.muxSubtitleTracks,
 });
 
 // ── Init ──
@@ -415,3 +418,21 @@ ui.downloadsToggle.addEventListener("click", () => {
   if (opening) refreshClearModelsUI();
 });
 ui.clearModelsBtn?.addEventListener("click", clearLocalModels);
+
+// Local engine (cli/subvid_server.py): when it is running, transcription can
+// run on the user's GPU and whole folders can be processed in batch.
+const batchPanel = createBatchPanel({ ui, tt, langName });
+batchPanel.wire();
+detectEngine().then((info) => {
+  if (!info) return;
+  const badge = tt("engine.detected", {
+    device: info.device.toUpperCase(),
+    model: info.model,
+  });
+  ui.batchOpenWrap.hidden = false;
+  ui.engineBadge.textContent = badge;
+  ui.localEngineField.hidden = false;
+  if (ui.localEngineHint) {
+    ui.localEngineHint.textContent = `${ui.localEngineHint.textContent} (${badge})`;
+  }
+});

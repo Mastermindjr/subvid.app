@@ -1,4 +1,5 @@
 import { drawFrame, drawSubtitlesAt } from "@/scripts/export/subtitleRenderer.ts"
+import { buildSrt } from "@/scripts/subtitles.ts"
 
 type VideoExportOptions = {
   ui: any
@@ -13,20 +14,24 @@ type VideoExportOptions = {
   setStatus: (message: string, kind?: string) => void
   modal: any
   remuxAudioToAacLc?: (file: File) => Promise<Blob>
+  muxSubtitleTracks?: (
+    file: File,
+    tracks: { lang: string; srt: string }[],
+  ) => Promise<Blob>
 }
 
 type WebCodecsExportResult =
   | { handled: true }
   | { handled: false; reason: string }
 
-type ExportFormat = "mp4" | "webm"
+type ExportFormat = "mkv" | "mp4" | "webm"
 type ExportQuality = "optimized" | "high" | "lossless"
 type ExportSettings = {
   format: ExportFormat
   quality: ExportQuality
 }
 
-const EXPORT_FORMATS = new Set<ExportFormat>(["mp4", "webm"])
+const EXPORT_FORMATS = new Set<ExportFormat>(["mkv", "mp4", "webm"])
 const EXPORT_QUALITIES = new Set<ExportQuality>([
   "optimized",
   "high",
@@ -79,7 +84,16 @@ export function createVideoExporter(options: VideoExportOptions) {
     setStatus,
     modal,
     remuxAudioToAacLc,
+    muxSubtitleTracks,
   } = options
+
+  // Quality doesn't apply to the MKV soft-subs export (pure stream copy).
+  function syncQualityControl() {
+    if (ui.exportQuality && !ui.downloadVideoBtn.disabled) {
+      ui.exportQuality.disabled = ui.exportFormat?.value === "mkv"
+    }
+  }
+  ui.exportFormat?.addEventListener("change", syncQualityControl)
 
   function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error || "unknown error")
@@ -207,6 +221,10 @@ export function createVideoExporter(options: VideoExportOptions) {
     ui.backBtn.disabled = true
 
     try {
+      if (settings.format === "mkv") {
+        await exportWithMux(segments, settings)
+        return
+      }
       let fallbackReason = getWebCodecsSupportIssue()
       if (!fallbackReason) {
         const result = await exportWithWebCodecs(segments, settings)
@@ -226,6 +244,66 @@ export function createVideoExporter(options: VideoExportOptions) {
       ui.transcribeBtn.disabled = false
       enableExports(true)
     }
+  }
+
+  // Soft-subs export: remux the original file into MKV attaching every visible
+  // subtitle track as a selectable stream. Pure stream copy — no re-encoding,
+  // so it finishes in seconds regardless of video length.
+  async function exportWithMux(segments: any[], settings: ExportSettings) {
+    modal.openExportModal()
+    modal.setExportStep("prepare", "active")
+    modal.setExportStage(tt("exportStages.preparingMux"), "busy")
+    ui.exportHint.textContent = tt("exportStages.muxHint")
+
+    const file = selectedVideoFile()
+    if (!file || !muxSubtitleTracks) {
+      modal.failExport(tt("exportErrors.webcodecsMissingFile"))
+      return
+    }
+
+    // `segments` is either a list of visible tracks ({ lang, segments }) or a
+    // plain segment list for the active language.
+    const tracks = (
+      segments.length && Array.isArray(segments[0]?.segments)
+        ? segments.map((track: any) => ({
+            lang: track.lang || activeLang(),
+            srt: buildSrt(track.segments),
+          }))
+        : [{ lang: activeLang(), srt: buildSrt(segments) }]
+    ).filter((track) => track.srt.trim())
+
+    if (!tracks.length) {
+      modal.failExport(tt("exportErrors.muxFailed", { error: "no subtitles" }))
+      return
+    }
+
+    modal.setExportStep("prepare", "done")
+    modal.setExportStep("render", "active")
+    modal.setExportStage(tt("exportStages.muxing"), "busy")
+    modal.setExportProgress(30)
+
+    let blob: Blob
+    try {
+      blob = await muxSubtitleTracks(file, tracks)
+    } catch (e) {
+      console.error("[export] subtitle mux failed", e)
+      modal.failExport(tt("exportErrors.muxFailed", { error: errorMessage(e) }))
+      return
+    }
+
+    modal.setExportStep("render", "done")
+    modal.setExportStep("encode", "done")
+    modal.setExportStep("done", "active")
+    modal.setExportStage(tt("exportStages.saving"), "busy")
+    downloadBlob(blob, settings)
+
+    modal.setExportStep("done", "done")
+    modal.setExportProgress(100)
+    modal.setExportStage(tt("exportStages.exported"), "ok")
+    ui.exportTitle.textContent = tt("exportStages.complete")
+    ui.exportHint.hidden = true
+    ui.exportClose.hidden = false
+    setStatus(tt("videoExported"), "ok")
   }
 
   async function exportWithWebCodecs(

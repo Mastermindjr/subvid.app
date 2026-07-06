@@ -1,6 +1,7 @@
 ---
 import DropzoneIcon from "@/assets/svg/dropzone.svg"
 import HeroUnderline from "@/assets/svg/hero-underline.svg"
+import BatchPanel from "@/components/BatchPanel.astro"
 import Footer from "@/components/Footer.astro"
 import { useTranslations } from "@/i18n/ui"
 
@@ -84,8 +85,17 @@ const t = useTranslations(Astro.currentLocale)
     </div>
   </div>
 
+  <div id="batch-open-wrap" class="batch-open-wrap" hidden>
+    <button id="batch-open" class="btn-soft" type="button">
+      ⚡ {t.batch.open}
+    </button>
+    <span id="engine-badge" class="engine-badge"></span>
+  </div>
+
   <Footer />
 </section>
+
+<BatchPanel />
 
 <script>
   const dropzone = document.getElementById("dropzone")

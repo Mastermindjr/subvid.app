@@ -1,5 +1,6 @@
 import { prettifyBytes } from "@/scripts/file.ts"
 import { ASR_MODEL, LANGS } from "@/scripts/languages.ts"
+import { engineAvailable, transcribeWithEngine } from "@/scripts/localEngine.ts"
 import { createAudioService } from "@/scripts/media/audio.ts"
 import type { Stage } from "@/scripts/stageManager.ts"
 import {
@@ -200,7 +201,7 @@ export function createConfigStageController({
     })
   }
 
-  const { ensureFfmpeg, extractAudioBuffer, remuxAudioToAacLc } = createAudioService({
+  const { ensureFfmpeg, extractAudioBuffer, remuxAudioToAacLc, muxSubtitleTracks } = createAudioService({
     tt,
     fetchWithProgress,
     updateDownloadStatus,
@@ -337,6 +338,44 @@ export function createConfigStageController({
     job: TranscriptionJob,
   ): Promise<TranscriptionJobResult> {
     const { file, language, wordTimestamps } = job.request
+
+    // Local engine path: upload the file to the local server and let
+    // faster-whisper (GPU) transcribe it. Skips audio extraction entirely.
+    // Any failure falls through to the in-browser pipeline below.
+    if (engineAvailable() && ui.localEngine?.checked) {
+      if (canUpdateJobProgress(job.key)) {
+        setStatus(tt("engine.uploading"), "busy")
+        setIndeterminate(true)
+      }
+      try {
+        const engineStartedAt = performance.now()
+        const result = await transcribeWithEngine(file, language, (pct, detail) => {
+          if (!canUpdateJobProgress(job.key)) return
+          setIndeterminate(false)
+          setStatus(tt("engine.transcribing", { detail: detail || "…" }), "busy")
+          applyProgress(5 + (pct / 100) * 85)
+        })
+        if (canUpdateJobProgress(job.key)) {
+          setIndeterminate(false)
+          setProgress(90)
+        }
+        logGeneration("transcription:local-engine", {
+          segments: result.segments.length,
+          language: result.language,
+          elapsedMs: Math.round(performance.now() - engineStartedAt),
+        })
+        return {
+          output: { localSegments: result.segments, language: result.language },
+          audio: new Float32Array(0),
+          audioSeconds: 0,
+          chunksDone: 0,
+        }
+      } catch (error) {
+        console.warn("[engine] local transcription failed; using browser pipeline", error)
+        if (canUpdateJobProgress(job.key)) setIndeterminate(false)
+      }
+    }
+
     const { audio, audioSeconds } = await getAudioJob(file, job.key).promise
 
     if (canUpdateJobProgress(job.key)) {
@@ -581,11 +620,15 @@ export function createConfigStageController({
       const vw = ui.configVideo?.videoWidth || ui.video?.videoWidth || 0
       const vh = ui.configVideo?.videoHeight || ui.video?.videoHeight || 0
       const aspectRatio = vw && vh ? vw / vh : 16 / 9
-      const baseSegments = normalizeSegments(output, {
-        audio,
-        sampleRate: 16_000,
-        aspectRatio,
-      })
+      // Segments from the local engine are already well-shaped subtitle lines
+      // (word-level timing, silence-aware breaks) — use them as-is.
+      const baseSegments = Array.isArray(output?.localSegments)
+        ? (output.localSegments as Segment[])
+        : normalizeSegments(output, {
+            audio,
+            sampleRate: 16_000,
+            aspectRatio,
+          })
       logGeneration("segments:ready", {
         detectedLang,
         segments: baseSegments.length,
@@ -712,5 +755,6 @@ export function createConfigStageController({
     generate,
     wireConfigStage,
     remuxAudioToAacLc,
+    muxSubtitleTracks,
   }
 }

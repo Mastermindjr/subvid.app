@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuración de subvid-batch (CLI y GUI).
+# Los argumentos pasados por línea de comandos tienen prioridad sobre este fichero.
+# Otro fichero puede indicarse con:  subvid_batch.py --config ruta/al/fichero.toml
+# ─────────────────────────────────────────────────────────────────────────────
+
+[general]
+# Modelo Whisper: tiny / base / small / medium / large-v3 / large-v3-turbo
+# (también acepta un repo de Hugging Face, p. ej. "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
+model = "large-v3-turbo"
+
+# Idioma del audio ("es", "en", …). Vacío = autodetección por archivo.
+language = ""
+
+# Dispositivo: auto / cuda / cpu
+device = "auto"
+
+# Tipo de cómputo de CTranslate2: auto / float16 / int8 / int8_float16
+compute_type = "auto"
+
+# Qué generar: mux (vídeo con pista incrustada) / sidecar (.srt externo) / both
+mode = "both"
+
+# Contenedor del mux: auto (conserva el original si puede) / mkv / mp4
+container = "auto"
+
+# Carpeta de salida. Vacío = junto a cada archivo de entrada.
+output_dir = ""
+
+# Archivos procesados en paralelo.
+jobs = 2
+
+# transcribe = subtítulos en el idioma original / translate = en inglés
+task = "transcribe"
+
+# Marcar la pista de subtítulos como activa por defecto al reproducir.
+default_track = false
+
+# Escanear subcarpetas al pasar un directorio.
+recursive = true
+
+# Regenerar aunque las salidas ya existan.
+overwrite = false
+
+[translation]
+# Idiomas de subtítulos adicionales generados en cada pasada (traducción local
+# con NLLB-200 en GPU). La pista del idioma original siempre se incluye.
+# Ejemplo: output_langs = ["es", "en"]
+output_langs = []
+
+# Modelo de traducción (CTranslate2). Opciones, de más rápida a mejor calidad:
+#   "JustFrederik/nllb-200-distilled-600M-ct2-float16"   (~1.2 GB, rápida)
+#   "JustFrederik/nllb-200-distilled-1.3B-ct2-float16"   (~2.6 GB, recomendado)
+#   "JustFrederik/nllb-200-3.3B-ct2-float16"             (~6.7 GB, la mejor)
+model = "JustFrederik/nllb-200-distilled-1.3B-ct2-float16"
+
+[vad]
+# Filtro de actividad de voz (Silero). Descarta tramos sin habla antes de
+# transcribir: evita alucinaciones en silencios/música y acelera el proceso.
+enabled = true
+
+# Umbral de detección (0.0–1.0). MÁS BAJO = MÁS SENSIBLE: rescata voz floja o
+# mezclada con música, a costa de más riesgo de alucinaciones. Por defecto 0.5;
+# prueba 0.3 si se salta diálogos flojos.
+threshold = 0.5
+
+# Silencio mínimo (ms) para considerar que el habla ha terminado.
+min_silence_ms = 2000
+
+# Margen (ms) que se conserva alrededor de cada tramo de voz detectado.
+speech_pad_ms = 400
+
+[lines]
+# Forma de las líneas de subtítulo (a partir de los timestamps por palabra).
+max_chars = 46        # longitud máxima de línea
+max_words = 9         # palabras máximas por línea
+max_seconds = 5.5     # tiempo máximo de una línea en pantalla
+word_gap_break = 0.6  # silencio (s) entre palabras que fuerza salto de línea

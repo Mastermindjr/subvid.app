@@ -31,3 +31,10 @@ pnpm-debug.log*
 # AI Agents & VibeCoding artifacts
 .agents/
 .claude/
+
+# CLI (Python)
+cli/.venv/
+cli/__pycache__/
+# Vídeos de prueba locales
+cli/**/*.mp4
+cli/Arc*/

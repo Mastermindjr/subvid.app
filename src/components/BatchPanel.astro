@@ -1,0 +1,157 @@
+---
+import Close from "@/assets/svg/close.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<section id="batch-panel" class="batch-panel" hidden>
+  <div class="batch-backdrop" id="batch-backdrop"></div>
+  <div class="batch-card" role="dialog" aria-modal="true" aria-label={t.batch.title}>
+    <header class="batch-head">
+      <h2>{t.batch.title}</h2>
+      <button id="batch-close" class="btn-icon" type="button" aria-label={t.batch.close}>
+        <Close />
+      </button>
+    </header>
+
+    <div class="batch-columns">
+      <div class="batch-browser">
+        <div class="batch-path-row">
+          <button id="batch-up" class="btn-soft" type="button" title={t.batch.up}>↑</button>
+          <span id="batch-path" class="batch-path"></span>
+        </div>
+        <ul id="batch-listing" class="batch-listing"></ul>
+        <button id="batch-add-folder" class="btn-soft" type="button">
+          {t.batch.addFolder}
+        </button>
+      </div>
+
+      <div class="batch-side">
+        <h3>{t.batch.selectedTitle}</h3>
+        <ul id="batch-selected" class="batch-selected"></ul>
+
+        <div class="batch-options">
+          <label><span>{t.batch.mode}</span>
+            <select id="batch-mode">
+              <option value="both">{t.batch.modeBoth}</option>
+              <option value="mux">{t.batch.modeMux}</option>
+              <option value="sidecar">{t.batch.modeSidecar}</option>
+            </select>
+          </label>
+          <label><span>{t.batch.model}</span>
+            <select id="batch-model">
+              <option value="large-v3-turbo">large-v3-turbo</option>
+              <option value="large-v3">large-v3</option>
+              <option value="medium">medium</option>
+              <option value="small">small</option>
+              <option value="base">base</option>
+              <option value="tiny">tiny</option>
+            </select>
+          </label>
+          <label><span>{t.batch.language}</span>
+            <select id="batch-lang"></select>
+          </label>
+          <label><span>{t.batch.task}</span>
+            <select id="batch-task">
+              <option value="transcribe">{t.batch.taskOriginal}</option>
+              <option value="translate">{t.batch.taskEnglish}</option>
+            </select>
+          </label>
+          <label class="batch-span2"><span>{t.batch.toLangs}</span>
+            <select id="batch-to-langs" multiple size="3"></select>
+          </label>
+          <label class="batch-span2"><span>{t.batch.outputDir}</span>
+            <input id="batch-output-dir" type="text" />
+          </label>
+          <label class="batch-check">
+            <input id="batch-recursive" type="checkbox" checked />
+            <span>{t.batch.recursive}</span>
+          </label>
+          <label class="batch-check">
+            <input id="batch-vad" type="checkbox" checked />
+            <span>{t.batch.vad}</span>
+          </label>
+          <label class="batch-span2"><span>{t.batch.vadThreshold}</span>
+            <span class="batch-vad-row">
+              <input id="batch-vad-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.5" />
+              <output id="batch-vad-value">0.50</output>
+            </span>
+          </label>
+        </div>
+
+        <div class="batch-actions">
+          <button id="batch-start" class="btn-primary" type="button">{t.batch.start}</button>
+          <button id="batch-cancel" class="btn-soft" type="button" hidden>{t.batch.cancel}</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="batch-files" class="batch-files"></div>
+    <p id="batch-status" class="batch-status" role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<style is:global>
+  .batch-panel { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 2rem 1rem; }
+  .batch-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.6); backdrop-filter: blur(4px); }
+  .batch-card {
+    position: relative; width: min(920px, 100%); max-height: 90vh; overflow: auto;
+    background: var(--surface, #101014); border: 1px solid rgb(255 255 255 / 0.1);
+    border-radius: 16px; padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 1rem;
+  }
+  .batch-head { display: flex; align-items: center; justify-content: space-between; }
+  .batch-head h2 { font-size: 1.1rem; }
+  .batch-columns { display: grid; grid-template-columns: 1.1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .batch-columns { grid-template-columns: 1fr; } }
+  .batch-browser { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+  .batch-path-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+  .batch-path { font-size: 0.8rem; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+  .batch-listing {
+    list-style: none; margin: 0; padding: 0.25rem; height: 240px; overflow: auto;
+    border: 1px solid rgb(255 255 255 / 0.1); border-radius: 10px; font-size: 0.85rem;
+  }
+  .batch-listing li { padding: 0.3rem 0.5rem; border-radius: 6px; cursor: pointer; display: flex; gap: 0.45rem; align-items: center; }
+  .batch-listing li:hover { background: rgb(255 255 255 / 0.07); }
+  .batch-listing li.is-selected { background: rgb(99 102 241 / 0.25); }
+  .batch-listing .size { margin-left: auto; opacity: 0.55; font-size: 0.75rem; }
+  .batch-side { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
+  .batch-side h3 { font-size: 0.9rem; opacity: 0.85; }
+  .batch-selected {
+    list-style: none; margin: 0; padding: 0.25rem; min-height: 52px; max-height: 110px; overflow: auto;
+    border: 1px dashed rgb(255 255 255 / 0.15); border-radius: 10px; font-size: 0.8rem;
+  }
+  .batch-selected li { display: flex; align-items: center; gap: 0.4rem; padding: 0.2rem 0.4rem; }
+  .batch-selected li button { margin-left: auto; opacity: 0.7; background: none; border: 0; color: inherit; cursor: pointer; }
+  .batch-selected li.batch-empty { opacity: 0.5; }
+  .batch-options { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.8rem; font-size: 0.8rem; }
+  .batch-options label { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .batch-options label > span:first-child { opacity: 0.75; }
+  .batch-options select[multiple] { min-height: 4.2em; }
+  .batch-options select, .batch-options input[type="text"] {
+    background: rgb(255 255 255 / 0.06); border: 1px solid rgb(255 255 255 / 0.12);
+    border-radius: 8px; padding: 0.35rem 0.5rem; color: inherit; font: inherit;
+  }
+  .batch-span2 { grid-column: span 2; }
+  .batch-check { flex-direction: row !important; align-items: center; gap: 0.45rem !important; }
+  .batch-vad-row { display: flex; align-items: center; gap: 0.6rem; }
+  .batch-vad-row input { flex: 1; }
+  .batch-actions { display: flex; gap: 0.6rem; margin-top: auto; }
+  .batch-files { display: flex; flex-direction: column; gap: 0.4rem; }
+  .batch-file-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) 110px minmax(0, 2fr) 90px;
+    gap: 0.7rem; align-items: center; font-size: 0.8rem;
+    padding: 0.35rem 0.6rem; border: 1px solid rgb(255 255 255 / 0.08); border-radius: 8px;
+  }
+  .batch-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .batch-file-state { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.85; }
+  .batch-file-state[data-state="done"] { color: #4ade80; }
+  .batch-file-state[data-state="error"] { color: #f87171; }
+  .batch-file-state[data-state="skipped"], .batch-file-state[data-state="cancelled"] { opacity: 0.55; }
+  .batch-file-bar { height: 6px; border-radius: 999px; background: rgb(255 255 255 / 0.08); overflow: hidden; }
+  .batch-file-bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #22d3ee); transition: width 0.4s ease; }
+  .batch-file-detail { opacity: 0.6; text-align: right; font-variant-numeric: tabular-nums; }
+  .batch-status { font-size: 0.85rem; opacity: 0.85; min-height: 1.2em; }
+  .batch-open-wrap { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.25rem; flex-wrap: wrap; justify-content: center; }
+  .engine-badge { font-size: 0.75rem; opacity: 0.75; border: 1px solid rgb(74 222 128 / 0.4); color: #4ade80; border-radius: 999px; padding: 0.2rem 0.6rem; }
+</style>

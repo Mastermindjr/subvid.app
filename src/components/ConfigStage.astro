@@ -54,6 +54,14 @@ const t = useTranslations(Astro.currentLocale)
         </span>
       </label>
 
+      <label id="local-engine-field" class="option-field" hidden>
+        <input id="local-engine" type="checkbox" checked />
+        <span class="option-copy">
+          <strong>{t.config.localEngine}</strong>
+          <small id="local-engine-hint">{t.config.localEngineHint}</small>
+        </span>
+      </label>
+
       <button id="transcribe-btn" class="btn-primary btn-block" type="button">
         {t.config.generate}
       </button>

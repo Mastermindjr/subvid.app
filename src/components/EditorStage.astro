@@ -50,6 +50,7 @@ const t = useTranslations(Astro.currentLocale)
         <label class="export-field" for="export-format">
           <span>{t.editor.videoFormat}</span>
           <select id="export-format" name="export-format">
+            <option value="mkv">{t.editor.formatMkv}</option>
             <option value="mp4">{t.editor.formatMp4}</option>
             <option value="webm">{t.editor.formatWebm}</option>
           </select>

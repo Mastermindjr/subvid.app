@@ -208,10 +208,59 @@ export function createAudioService(options: AudioServiceOptions) {
     }
   }
 
+  // ISO 639-1 → 639-2/B, used for the subtitle stream language metadata that
+  // players (Jellyfin, VLC…) read to label and toggle the track.
+  const ISO639_2: Record<string, string> = {
+    en: "eng", es: "spa", fr: "fre", de: "ger", pt: "por",
+    it: "ita", nl: "dut", ru: "rus", ja: "jpn", ko: "kor",
+    zh: "chi", ar: "ara", hi: "hin", pl: "pol", tr: "tur",
+  }
+
+  async function muxSubtitleTracks(
+    file: File,
+    tracks: { lang: string; srt: string }[],
+  ): Promise<Blob> {
+    const worker = await ensureFfmpeg()
+    const extension = /\.(\w{2,4})$/.exec(file.name)?.[1]?.toLowerCase() || "mp4"
+    const inputName = `mux-source.${extension}`
+    const outputName = "mux-output.mkv"
+    const srtNames = tracks.map((_, i) => `mux-subs-${i}.srt`)
+    const encoder = new TextEncoder()
+    try {
+      await worker.writeFile(inputName, await fetchFile(file))
+      for (const [i, track] of tracks.entries()) {
+        await worker.writeFile(srtNames[i], encoder.encode(track.srt))
+      }
+      const args = ["-i", inputName]
+      for (const name of srtNames) args.push("-i", name)
+      // Copy only video + audio from the source, then append our subtitle
+      // inputs. `-c copy` stream-copies everything (SRT is native in MKV),
+      // so this never re-encodes the video.
+      args.push("-map", "0:v:0", "-map", "0:a?")
+      for (let i = 0; i < srtNames.length; i++) args.push("-map", `${i + 1}:0`)
+      args.push("-c", "copy")
+      for (const [i, track] of tracks.entries()) {
+        args.push(`-metadata:s:s:${i}`, `language=${ISO639_2[track.lang] || "und"}`)
+        args.push(`-disposition:s:${i}`, "0")
+      }
+      args.push(outputName)
+      const code = await worker.exec(args)
+      if (code !== 0) throw new Error(`ffmpeg exited with code ${code}`)
+      const data = await worker.readFile(outputName)
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer)
+      return new Blob([bytes], { type: "video/x-matroska" })
+    } finally {
+      await worker.deleteFile(inputName).catch(() => {})
+      await worker.deleteFile(outputName).catch(() => {})
+      for (const name of srtNames) await worker.deleteFile(name).catch(() => {})
+    }
+  }
+
   return {
     ensureFfmpeg,
     decodeWavPcm16,
     extractAudioBuffer,
     remuxAudioToAacLc,
+    muxSubtitleTracks,
   }
 }
