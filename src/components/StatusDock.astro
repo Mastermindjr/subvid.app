@@ -1,9 +1,11 @@
 ---
 import Check from "@/assets/svg/check.svg"
 import Ring from "@/assets/svg/ring.svg"
-import { useTranslations } from "@/i18n/ui"
+import { languages, defaultLang, toLang, useTranslations } from "@/i18n/ui"
 
 const t = useTranslations(Astro.currentLocale)
+const current = toLang(Astro.currentLocale)
+const localePath = (code: string) => (code === defaultLang ? "/" : `/${code}/`)
 ---
 
 <div id="status-dock" class="status-dock">
@@ -18,4 +20,20 @@ const t = useTranslations(Astro.currentLocale)
     <span id="downloads-pct" class="ring-pct">0%</span>
     <Check class="ring-check" />
   </button>
+  <nav class="top-lang" aria-label={t.footer.language}>
+    {
+      Object.entries(languages).map(([code, name]) => (
+        <a
+          class="top-lang-link"
+          href={localePath(code)}
+          hreflang={code}
+          data-locale={code}
+          title={name}
+          aria-current={code === current ? "true" : undefined}
+        >
+          {code.toUpperCase()}
+        </a>
+      ))
+    }
+  </nav>
 </div>

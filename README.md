@@ -121,12 +121,13 @@ Las ruedas CUDA (cuBLAS/cuDNN) vienen en `requirements.txt`; si no hay GPU se us
 ### Uso
 
 ```sh
-# Carpeta completa (recursivo): por cada vídeo genera la versión con pista
-# de subtítulos activable + el .srt sidecar (modo "both" por defecto)
+# Carpeta completa (recursivo): genera un .srt sidecar por vídeo
+# (modo "sidecar" por defecto; Jellyfin los detecta solo y no se
+# reescribe ningún vídeo — importante en discos SMR)
 python subvid_batch.py "D:\Series\MiSerie"
 
-# Solo .srt sidecar (no crea vídeos nuevos; Jellyfin los detecta solo)
-python subvid_batch.py "D:\Pelis" --mode sidecar
+# Además del .srt, crear la versión con pista de subtítulos incrustada
+python subvid_batch.py "D:\Pelis" --mode both
 
 # Idioma forzado, 3 archivos en paralelo, salida a otra carpeta
 python subvid_batch.py "D:\Pelis" -l es -j 3 -o "D:\Salida"
@@ -139,17 +140,17 @@ python subvid_batch.py video.mkv -m large-v3
 
 | Opción | Por defecto | Descripción |
 | --- | --- | --- |
-| `--mode mux\|sidecar\|both` | `both` | Pista incrustada, `.srt` externo, o ambos |
+| `--mode mux\|sidecar\|both` | `sidecar` | `.srt` externo (recomendado para Jellyfin), pista incrustada, o ambos |
 | `--to LANGS` | — | Idiomas extra en una sola pasada (`--to es,en`): traducción **local** con NLLB-200 en GPU; cada idioma sale como pista propia + `.srt`. La pista del idioma original siempre se incluye |
 | `--audio-track N` | `0` | Qué pista de audio transcribir si el vídeo tiene varias (doblajes). Por defecto la primera |
 | `-m, --model` | `large-v3-turbo` | Modelo Whisper: `tiny`/`base`/`small`/`medium`/`large-v3`/`large-v3-turbo` |
 | `-l, --language` | autodetección | Idioma del audio (`es`, `en`, …) |
-| `-j, --jobs` | `2` | Archivos procesados en paralelo |
+| `-j, --jobs` | `1` | Archivos procesados en paralelo (con una sola GPU, más de 1 no acelera: comparten la misma cola CUDA y congelan el escritorio) |
 | `--container auto\|mkv\|mp4` | `auto` | `auto` conserva el contenedor original (MP4/MOV → MP4 con `mov_text`; el resto → MKV con SRT) |
 | `--device auto\|cuda\|cpu` | `auto` | Dispositivo de inferencia |
 | `--task transcribe\|translate` | `transcribe` | `translate` genera los subtítulos en inglés |
 | `--default-track` | desactivado | Marca la pista como activa por defecto al reproducir |
-| `--no-vad` | desactivado | Desactiva el filtro de voz (útil si se salta diálogo flojo o con música) |
+| `--no-vad` | — | Fuerza el filtro de voz apagado. El VAD viene **desactivado por defecto** (`config.toml`): incluso con alta sensibilidad se saltaba voz sobre música; actívalo en `[vad]` si aparecen subtítulos "fantasma" en silencios |
 | `--overwrite` | desactivado | Regenera aunque la salida exista (si no, se salta lo ya procesado) |
 | `--no-recursive` | desactivado | No escanear subcarpetas |
 

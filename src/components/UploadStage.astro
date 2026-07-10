@@ -2,7 +2,6 @@
 import DropzoneIcon from "@/assets/svg/dropzone.svg"
 import HeroUnderline from "@/assets/svg/hero-underline.svg"
 import BatchPanel from "@/components/BatchPanel.astro"
-import Footer from "@/components/Footer.astro"
 import { useTranslations } from "@/i18n/ui"
 
 const t = useTranslations(Astro.currentLocale)
@@ -59,43 +58,107 @@ const t = useTranslations(Astro.currentLocale)
     <p class="hero-sub">{t.hero.sub}</p>
   </div>
 
-  <div
-    id="dropzone"
-    class="dropzone"
-    role="button"
-    tabindex="0"
-    aria-label={t.hero.dropAria}
-    data-default-label={t.hero.dropLabel}
-    data-default-hint={t.hero.dropHint}
-    data-unsupported-label={t.hero.dropUnsupportedLabel}
-    data-unsupported-hint={t.hero.dropUnsupportedHint}
-  >
-    <input id="video-input" type="file" accept="video/*,audio/*" hidden />
-    <span class="dz-spotlight" aria-hidden="true"></span>
-    <div class="dz-body">
-      <span class="dz-icon-wrap">
-        <span class="dz-pulse" aria-hidden="true"></span>
-        <span class="dz-pulse dz-pulse--2" aria-hidden="true"></span>
-        <DropzoneIcon class="dz-icon" />
-      </span>
-      <strong id="dropzone-label" class="dz-label">{t.hero.dropLabel}</strong>
-      <span id="dropzone-hint" class="dz-hint" aria-live="polite">
-        {t.hero.dropHint}
-      </span>
+  <div class="mode-grid">
+    <div class="mode-card">
+      <div class="mode-card-head">
+        <h2>{t.modes.singleTitle}</h2>
+        <p>{t.modes.singleDesc}</p>
+      </div>
+      <div
+        id="dropzone"
+        class="dropzone"
+        role="button"
+        tabindex="0"
+        aria-label={t.hero.dropAria}
+        data-default-label={t.hero.dropLabel}
+        data-default-hint={t.hero.dropHint}
+        data-unsupported-label={t.hero.dropUnsupportedLabel}
+        data-unsupported-hint={t.hero.dropUnsupportedHint}
+      >
+        <input id="video-input" type="file" accept="video/*,audio/*" hidden />
+        <span class="dz-spotlight" aria-hidden="true"></span>
+        <div class="dz-body">
+          <span class="dz-icon-wrap">
+            <span class="dz-pulse" aria-hidden="true"></span>
+            <span class="dz-pulse dz-pulse--2" aria-hidden="true"></span>
+            <DropzoneIcon class="dz-icon" />
+          </span>
+          <strong id="dropzone-label" class="dz-label">{t.hero.dropLabel}</strong>
+          <span id="dropzone-hint" class="dz-hint" aria-live="polite">
+            {t.hero.dropHint}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="mode-card">
+      <div class="mode-card-head">
+        <h2>⚡ {t.modes.batchTitle}</h2>
+        <p>{t.modes.batchDesc}</p>
+      </div>
+      <div class="mode-card-body">
+        <div id="engine-on" hidden>
+          <span id="engine-badge" class="engine-badge"></span>
+          <button id="batch-open" class="btn-primary" type="button">
+            {t.batch.open}
+          </button>
+        </div>
+        <div id="engine-off">
+          <span class="engine-badge engine-badge--off">{t.modes.engineMissing}</span>
+          <p class="engine-help">{t.modes.engineNeeded}</p>
+          <code class="engine-cmd">python cli/subvid_server.py</code>
+          <button id="engine-retry" class="btn-soft" type="button">
+            {t.modes.engineRetry}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
-
-  <div id="batch-open-wrap" class="batch-open-wrap" hidden>
-    <button id="batch-open" class="btn-soft" type="button">
-      ⚡ {t.batch.open}
-    </button>
-    <span id="engine-badge" class="engine-badge"></span>
-  </div>
-
-  <Footer />
 </section>
 
 <BatchPanel />
+
+<style is:global>
+  .mode-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1.25rem;
+    width: min(980px, 100%);
+    margin-inline: auto;
+    align-items: stretch;
+  }
+  .mode-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    background: rgb(255 255 255 / 0.02);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 18px;
+    padding: 1.1rem 1.2rem 1.2rem;
+  }
+  .mode-card-head h2 { font-size: 1.02rem; margin-bottom: 0.3rem; }
+  .mode-card-head p { font-size: 0.82rem; opacity: 0.65; line-height: 1.45; }
+  .mode-card .dropzone { flex: 1; width: 100%; }
+  .mode-card-body {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    border: 1.5px dashed rgb(255 255 255 / 0.12);
+    border-radius: 14px;
+    padding: 1.2rem;
+    min-height: 180px;
+  }
+  #engine-on, #engine-off {
+    display: flex; flex-direction: column; align-items: center; gap: 0.8rem; text-align: center;
+  }
+  #engine-on[hidden], #engine-off[hidden] { display: none; }
+  .engine-help { font-size: 0.8rem; opacity: 0.65; }
+  .engine-cmd {
+    background: #0e1118; border: 1px solid #1c2234; border-radius: 8px;
+    padding: 0.4rem 0.8rem; font-size: 0.8rem; color: #b8f060; user-select: all;
+  }
+  .engine-badge--off { border-color: rgb(248 113 113 / 0.4); color: #f87171; }
+</style>
 
 <script>
   const dropzone = document.getElementById("dropzone")

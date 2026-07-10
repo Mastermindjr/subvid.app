@@ -80,8 +80,19 @@ def make_args(options: dict | None = None) -> argparse.Namespace:
         attr = key.replace("-", "_")
         if value is None or value == "":
             continue
-        if attr == "vad_threshold" and args.vad_options:
-            args.vad_options["threshold"] = max(0.05, min(0.95, float(value)))
+        if attr == "vad_threshold":
+            # Re-enable VAD even when the config disables it by default: the
+            # UI sends a threshold only when its VAD checkbox is on.
+            threshold = max(0.05, min(0.95, float(value)))
+            if args.vad_options:
+                args.vad_options["threshold"] = threshold
+            else:
+                vad_cfg = CONFIG.get("vad", {})
+                args.vad_options = {
+                    "threshold": threshold,
+                    "min_silence_duration_ms": int(vad_cfg.get("min_silence_ms", 2000)),
+                    "speech_pad_ms": int(vad_cfg.get("speech_pad_ms", 400)),
+                }
         elif attr == "no_vad" and value:
             args.vad_options = None
         elif hasattr(args, attr):
@@ -183,6 +194,8 @@ def create_batch_job(payload: dict) -> dict:
         "status": "running",
         "cancelled": False,
         "created": time.time(),
+        "startedAt": time.time(),
+        "finishedAt": None,
         "files": [
             {"name": f.name, "path": str(f), "status": "queued", "pct": 0, "detail": ""}
             for f in files
@@ -231,6 +244,7 @@ def run_batch_job(job: dict, files: list[Path], args: argparse.Namespace) -> Non
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for index, path in enumerate(files):
             pool.submit(worker, index, path)
+    job["finishedAt"] = time.time()
     job["status"] = "cancelled" if job["cancelled"] else "done"
 
 

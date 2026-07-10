@@ -395,7 +395,10 @@ syncStyleControls();
 applyCaptionStyle();
 wireStyleControls();
 wireSegmentEditor();
-configStageController.preloadAssetsInBackground();
+// Note: models are intentionally NOT preloaded here. Downloading ffmpeg WASM +
+// Whisper (~330 MB) on every page load overloaded reloads and language
+// switches; the pipeline loads them lazily the first time an in-browser
+// transcription actually runs (never, when the local engine handles it).
 setStage("upload");
 uploadStageController.wireUploadStage();
 configStageController.wireConfigStage();
@@ -423,16 +426,27 @@ ui.clearModelsBtn?.addEventListener("click", clearLocalModels);
 // run on the user's GPU and whole folders can be processed in batch.
 const batchPanel = createBatchPanel({ ui, tt, langName });
 batchPanel.wire();
-detectEngine().then((info) => {
+const baseLocalEngineHint = ui.localEngineHint?.textContent || "";
+function applyEngineState(info: { device: string; model: string } | null) {
+  ui.engineOn.hidden = !info;
+  ui.engineOff.hidden = !!info;
+  ui.localEngineField.hidden = !info;
   if (!info) return;
   const badge = tt("engine.detected", {
     device: info.device.toUpperCase(),
     model: info.model,
   });
-  ui.batchOpenWrap.hidden = false;
   ui.engineBadge.textContent = badge;
-  ui.localEngineField.hidden = false;
   if (ui.localEngineHint) {
-    ui.localEngineHint.textContent = `${ui.localEngineHint.textContent} (${badge})`;
+    ui.localEngineHint.textContent = `${baseLocalEngineHint} (${badge})`;
+  }
+}
+detectEngine().then(applyEngineState);
+ui.engineRetry?.addEventListener("click", async () => {
+  ui.engineRetry.disabled = true;
+  try {
+    applyEngineState(await detectEngine());
+  } finally {
+    ui.engineRetry.disabled = false;
   }
 });

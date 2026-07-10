@@ -19,7 +19,9 @@ device = "auto"
 compute_type = "auto"
 
 # Qué generar: mux (vídeo con pista incrustada) / sidecar (.srt externo) / both
-mode = "both"
+# sidecar es lo recomendado para Jellyfin: detecta los .srt automáticamente y
+# no reescribe los vídeos (importante en discos SMR como los WD Red EFAX).
+mode = "sidecar"
 
 # Contenedor del mux: auto (conserva el original si puede) / mkv / mp4
 container = "auto"
@@ -27,8 +29,10 @@ container = "auto"
 # Carpeta de salida. Vacío = junto a cada archivo de entrada.
 output_dir = ""
 
-# Archivos procesados en paralelo.
-jobs = 2
+# Archivos procesados en paralelo. Con una sola GPU, 1 rinde prácticamente
+# igual que 2 (comparten la misma cola CUDA) y deja el equipo usable durante
+# el proceso. Sube el valor solo si transcribes en CPU o con varias GPUs.
+jobs = 1
 
 # transcribe = subtítulos en el idioma original / translate = en inglés
 task = "transcribe"
@@ -57,7 +61,9 @@ model = "JustFrederik/nllb-200-distilled-1.3B-ct2-float16"
 [vad]
 # Filtro de actividad de voz (Silero). Descarta tramos sin habla antes de
 # transcribir: evita alucinaciones en silencios/música y acelera el proceso.
-enabled = true
+# Desactivado por defecto: incluso con sensibilidad alta se comía fragmentos
+# de voz sobre música. Actívalo si aparecen subtítulos "fantasma" en silencios.
+enabled = false
 
 # Umbral de detección (0.0–1.0). MÁS BAJO = MÁS SENSIBLE: rescata voz floja o
 # mezclada con música, a costa de más riesgo de alucinaciones. Por defecto 0.5;

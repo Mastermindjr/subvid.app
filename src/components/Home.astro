@@ -28,3 +28,39 @@ const i18n = clientStrings(Astro.currentLocale)
 <script>
   import "@/scripts/app.ts"
 </script>
+
+<script is:inline>
+  // Persist an explicit language choice so the edge redirect stops auto-detecting
+  // and respects the user's decision on future visits to the root.
+  document.querySelectorAll(".top-lang-link").forEach((link) => {
+    link.addEventListener("click", () => {
+      const code = link.getAttribute("data-locale")
+      if (code)
+        document.cookie = `locale=${code}; path=/; max-age=31536000; samesite=lax`
+    })
+  })
+</script>
+
+<style is:global>
+  /* Lives inside the status dock's flex row (top-right), so it can never
+     overlap the downloads label/ring. */
+  .top-lang {
+    display: flex;
+    gap: 0.15rem;
+    background: rgb(10 12 17 / 0.75);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 999px;
+    padding: 0.2rem 0.3rem;
+    backdrop-filter: blur(6px);
+  }
+  .top-lang-link {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    color: #8fa3c8;
+    text-decoration: none;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+  }
+  .top-lang-link:hover { color: #dfe6f3; background: rgb(255 255 255 / 0.07); }
+  .top-lang-link[aria-current="true"] { color: #b8f060; background: rgb(184 240 96 / 0.12); }
+</style>

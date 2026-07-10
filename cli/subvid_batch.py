@@ -678,7 +678,7 @@ def build_parser(config: dict) -> argparse.ArgumentParser:
     parser.add_argument("-m", "--model", default="large-v3-turbo", help="faster-whisper model (tiny/base/small/medium/large-v3/large-v3-turbo)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"], help="inference device")
     parser.add_argument("--compute-type", default="auto", help="ctranslate2 compute type (auto/float16/int8/int8_float16)")
-    parser.add_argument("--mode", default="both", choices=["mux", "sidecar", "both"],
+    parser.add_argument("--mode", default="sidecar", choices=["mux", "sidecar", "both"],
                         help="mux: new file with embedded toggleable track; sidecar: .srt next to the video (Jellyfin auto-detects it); both")
     parser.add_argument("--container", default="auto", choices=["auto", "mkv", "mp4"],
                         help="container for muxed output; auto keeps the original when possible (mp4/mov stay mp4, rest become mkv)")
@@ -689,7 +689,8 @@ def build_parser(config: dict) -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, metavar="FILE",
                         help=f"config file (default: {DEFAULT_CONFIG_PATH.name} next to this script)")
     parser.add_argument("-o", "--output-dir", default=None, help="output directory (default: next to each input)")
-    parser.add_argument("-j", "--jobs", type=int, default=2, help="files processed in parallel")
+    parser.add_argument("-j", "--jobs", type=int, default=1,
+                        help="files processed in parallel (1 is best on a single GPU: parallel jobs share the same CUDA queue and freeze the desktop for no throughput gain)")
     parser.add_argument("--to", dest="to_langs", default=None, metavar="LANGS",
                         help="comma-separated extra subtitle languages translated locally with NLLB "
                              "(e.g. 'es,en'); the original-language track is always included")
@@ -715,7 +716,7 @@ def finalize_args(args: argparse.Namespace, config: dict) -> None:
     """Resolve VAD options and subtitle line shaping from config + CLI flags."""
     # Effective VAD settings: [vad] section + command-line overrides.
     vad_cfg = config.get("vad", {})
-    if args.no_vad or not vad_cfg.get("enabled", True):
+    if args.no_vad or not vad_cfg.get("enabled", False):
         args.vad_options = None
     else:
         threshold = args.vad_threshold if args.vad_threshold is not None else vad_cfg.get("threshold", 0.5)

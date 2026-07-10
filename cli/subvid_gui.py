@@ -77,7 +77,7 @@ class App:
         ttk.Label(opts, text="Salida (vacío = junto a cada vídeo)").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=2)
         out_frame.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
 
-        self.var_mode = tk.StringVar(value=general.get("mode", "both"))
+        self.var_mode = tk.StringVar(value=general.get("mode", "sidecar"))
         row(1, 0, "Modo", ttk.Combobox(opts, textvariable=self.var_mode, values=MODES, state="readonly"))
         self.var_model = tk.StringVar(value=general.get("model", "large-v3-turbo"))
         row(1, 2, "Modelo", ttk.Combobox(opts, textvariable=self.var_model, values=MODELS))
@@ -91,7 +91,7 @@ class App:
 
         self.var_container = tk.StringVar(value=general.get("container", "auto"))
         row(3, 0, "Contenedor", ttk.Combobox(opts, textvariable=self.var_container, values=CONTAINERS, state="readonly"))
-        self.var_jobs = tk.IntVar(value=int(general.get("jobs", 2)))
+        self.var_jobs = tk.IntVar(value=int(general.get("jobs", 1)))
         row(3, 2, "Archivos en paralelo", ttk.Spinbox(opts, from_=1, to=16, textvariable=self.var_jobs, width=5))
 
         tx_langs = cfg.get("translation", {}).get("output_langs", [])
@@ -103,7 +103,7 @@ class App:
         self.var_recursive = tk.BooleanVar(value=bool(general.get("recursive", True)))
         self.var_overwrite = tk.BooleanVar(value=bool(general.get("overwrite", False)))
         self.var_default_track = tk.BooleanVar(value=bool(general.get("default_track", False)))
-        self.var_vad = tk.BooleanVar(value=bool(vad.get("enabled", True)))
+        self.var_vad = tk.BooleanVar(value=bool(vad.get("enabled", False)))
         ttk.Checkbutton(checks, text="Recursivo", variable=self.var_recursive).pack(side="left", padx=(0, 12))
         ttk.Checkbutton(checks, text="Sobrescribir", variable=self.var_overwrite).pack(side="left", padx=(0, 12))
         ttk.Checkbutton(checks, text="Pista activa por defecto", variable=self.var_default_track).pack(side="left", padx=(0, 12))
@@ -136,6 +136,7 @@ class App:
         self.stop_btn = ttk.Button(actions, text="■ Detener", command=self.stop, state="disabled")
         self.stop_btn.grid(row=0, column=2)
 
+        self.sync_vad()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.after(100, self.drain_log)
 

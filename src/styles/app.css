@@ -472,7 +472,7 @@ body {
 
 /* ── Stage: upload ── */
 .stage-upload {
-  width: min(560px, 100%);
+  width: min(980px, 100%);
   min-height: calc(100vh - 3rem);
   display: flex;
   flex-direction: column;
@@ -1476,6 +1476,17 @@ select:hover {
 select:focus {
   outline: none;
   border-color: #b8f060;
+}
+/* Pin native form controls to the dark scheme: with "dark light" the UA could
+   re-evaluate the scheme and briefly repaint selects white-on-white. */
+:root {
+  color-scheme: dark;
+}
+select,
+select option {
+  color-scheme: dark;
+  background-color: #0e1118;
+  color: #c3cbdd;
 }
 
 .chips {
