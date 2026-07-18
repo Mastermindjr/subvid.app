@@ -96,7 +96,8 @@ const t = useTranslations(Astro.currentLocale)
         <h2>⚡ {t.modes.batchTitle}</h2>
         <p>{t.modes.batchDesc}</p>
       </div>
-      <div class="mode-card-body">
+      <div id="cli-zone" class="mode-card-body">
+        <span class="dz-spotlight" aria-hidden="true"></span>
         <div id="engine-on" hidden>
           <span id="engine-badge" class="engine-badge"></span>
           <button id="batch-open" class="btn-primary" type="button">
@@ -128,18 +129,30 @@ const t = useTranslations(Astro.currentLocale)
     align-items: stretch;
   }
   .mode-card {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto 1fr;
     gap: 0.9rem;
     background: rgb(255 255 255 / 0.02);
     border: 1px solid rgb(255 255 255 / 0.08);
     border-radius: 18px;
     padding: 1.1rem 1.2rem 1.2rem;
   }
+  /* Align the two cards' rows across the grid so the dropzone and the CLI
+     zone are exactly the same size even when one head text runs longer. */
+  @supports (grid-template-rows: subgrid) {
+    .mode-card {
+      grid-template-rows: subgrid;
+      grid-row: span 2;
+    }
+  }
   .mode-card-head h2 { font-size: 1.02rem; margin-bottom: 0.3rem; }
   .mode-card-head p { font-size: 0.82rem; opacity: 0.65; line-height: 1.45; }
   .mode-card .dropzone { flex: 1; width: 100%; }
   .mode-card-body {
+    position: relative;
+    isolation: isolate;
+    z-index: 1;
+    overflow: hidden;
     flex: 1;
     display: grid;
     place-items: center;
@@ -147,7 +160,25 @@ const t = useTranslations(Astro.currentLocale)
     border-radius: 14px;
     padding: 1.2rem;
     min-height: 180px;
+    cursor: pointer;
+    transition:
+      border-color 240ms ease,
+      background 240ms ease,
+      transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 320ms ease;
   }
+  .mode-card-body:hover {
+    border-color: #b8f060;
+    background: rgba(184, 240, 96, 0.045);
+    transform: translateY(-4px);
+    box-shadow:
+      0 24px 55px -24px rgba(184, 240, 96, 0.3),
+      inset 0 0 0 1px rgba(184, 240, 96, 0.08);
+  }
+  .mode-card-body:hover .dz-spotlight {
+    opacity: 1;
+  }
+  #engine-on, #engine-off { position: relative; }
   #engine-on, #engine-off {
     display: flex; flex-direction: column; align-items: center; gap: 0.8rem; text-align: center;
   }
@@ -161,21 +192,36 @@ const t = useTranslations(Astro.currentLocale)
 </style>
 
 <script>
-  const dropzone = document.getElementById("dropzone")
-  if (dropzone && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    let rafId = 0
-    let pendingX = 0
-    let pendingY = 0
-    dropzone.addEventListener("pointermove", (event) => {
-      pendingX = event.clientX
-      pendingY = event.clientY
-      if (rafId) return
-      rafId = requestAnimationFrame(() => {
-        rafId = 0
-        const rect = dropzone.getBoundingClientRect()
-        dropzone.style.setProperty("--mx", `${pendingX - rect.left}px`)
-        dropzone.style.setProperty("--my", `${pendingY - rect.top}px`)
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    for (const id of ["dropzone", "cli-zone"]) {
+      const zone = document.getElementById(id)
+      if (!zone) continue
+      let rafId = 0
+      let pendingX = 0
+      let pendingY = 0
+      zone.addEventListener("pointermove", (event) => {
+        pendingX = event.clientX
+        pendingY = event.clientY
+        if (rafId) return
+        rafId = requestAnimationFrame(() => {
+          rafId = 0
+          const rect = zone.getBoundingClientRect()
+          zone.style.setProperty("--mx", `${pendingX - rect.left}px`)
+          zone.style.setProperty("--my", `${pendingY - rect.top}px`)
+        })
       })
-    })
+    }
   }
+
+  // The whole CLI zone is clickable, mirroring the dropzone: open the batch
+  // panel when the engine is up, retry detection when it is not. Clicks on
+  // the inner buttons (they handle themselves) or on the copyable command
+  // are left alone.
+  document.getElementById("cli-zone")?.addEventListener("click", (event) => {
+    const target = event.target
+    if (target instanceof Element && target.closest("button, code")) return
+    const engineOn = document.getElementById("engine-on")
+    const action = engineOn && !engineOn.hidden ? "batch-open" : "engine-retry"
+    document.getElementById(action)?.click()
+  })
 </script>

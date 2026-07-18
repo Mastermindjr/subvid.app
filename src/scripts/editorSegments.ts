@@ -1,5 +1,5 @@
 import { $ } from "@/scripts/dom.ts"
-import { LANGS } from "@/scripts/languages.ts"
+import { LANGS, orderedSubtitleLangs } from "@/scripts/languages.ts"
 import { formatClock, parseClock } from "@/scripts/subtitles.ts"
 
 type EditorState = {
@@ -99,18 +99,27 @@ export function createEditorSegmentsController(options: EditorSegmentsOptions) {
 
   function buildLangSelects() {
     ui.inputLang.innerHTML = `<option value="">${tt("detectAuto")}</option>`
-    ui.outputLang.innerHTML = `<option value="same">${tt("sameAsAudio")}</option>`
     Object.keys(LANGS).forEach((code) => {
       const inOpt = document.createElement("option")
       inOpt.value = code
       inOpt.textContent = langName(code)
       ui.inputLang.appendChild(inOpt)
-
-      const outOpt = document.createElement("option")
-      outOpt.value = code
-      outOpt.textContent = langName(code)
-      ui.outputLang.appendChild(outOpt)
     })
+
+    // Subtitle language: Original, English, Spanish, then an "Others" group.
+    ui.outputLang.innerHTML = `<option value="same">${tt("sameAsAudio")}</option>`
+    const { primary, others } = orderedSubtitleLangs()
+    const langOption = (code: string) => {
+      const opt = document.createElement("option")
+      opt.value = code
+      opt.textContent = langName(code)
+      return opt
+    }
+    primary.forEach((code) => ui.outputLang.appendChild(langOption(code)))
+    const group = document.createElement("optgroup")
+    group.label = tt("othersGroup")
+    others.forEach((code) => group.appendChild(langOption(code)))
+    ui.outputLang.appendChild(group)
   }
 
   function renderTabs() {

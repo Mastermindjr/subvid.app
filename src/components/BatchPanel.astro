@@ -1,30 +1,62 @@
 ---
 import Close from "@/assets/svg/close.svg"
-import { useTranslations } from "@/i18n/ui"
+import { defaultLang, languages, toLang, useTranslations } from "@/i18n/ui"
 
 const t = useTranslations(Astro.currentLocale)
+const current = toLang(Astro.currentLocale)
+const localePath = (code: string) => (code === defaultLang ? "/" : `/${code}/`)
 ---
 
 <section id="batch-panel" class="batch-panel" hidden>
   <div class="batch-backdrop" id="batch-backdrop"></div>
   <div class="batch-card" role="dialog" aria-modal="true" aria-label={t.batch.title}>
     <header class="batch-head">
-      <h2>{t.batch.title}</h2>
-      <button id="batch-close" class="btn-icon" type="button" aria-label={t.batch.close}>
-        <Close />
-      </button>
+      <h2>{t.batch.title} <span id="batch-mode-badge" class="batch-mode-badge"></span></h2>
+      <div class="batch-head-tools">
+        <nav class="top-lang" aria-label={t.footer.language}>
+          {
+            Object.entries(languages).map(([code]) => (
+              <a
+                class="top-lang-link"
+                href={localePath(code)}
+                hreflang={code}
+                data-locale={code}
+                aria-current={code === current ? "true" : undefined}
+              >
+                {code.toUpperCase()}
+              </a>
+            ))
+          }
+        </nav>
+        <button id="batch-close" class="btn-icon" type="button" aria-label={t.batch.close}>
+          <Close />
+        </button>
+      </div>
     </header>
 
     <div class="batch-columns">
       <div class="batch-browser">
-        <nav id="batch-crumbs" class="batch-crumbs" aria-label={t.batch.pathAria}></nav>
-        <div class="batch-toolbar">
-          <input id="batch-filter" type="search" placeholder={t.batch.filter} />
-          <button id="batch-add-folder" class="btn-soft" type="button" title={t.batch.addFolderTitle}>
-            ＋ {t.batch.addFolder}
+        <!-- Client mode: pick files from THIS device; they are uploaded to
+             the engine for processing and results are downloaded back. -->
+        <div id="batch-client-picker" class="batch-client-picker">
+          <input id="batch-file-input" type="file" multiple hidden
+            accept="video/*,audio/*,.mkv,.ts,.m2ts,.wmv,.flv" />
+          <button id="batch-add-files" class="btn-soft" type="button">
+            🎬 {t.batch.addFiles}
           </button>
+          <p class="batch-hint">{t.batch.clientHint}</p>
         </div>
-        <ul id="batch-listing" class="batch-listing"></ul>
+        <!-- Server mode: browse the folders of the machine running the engine. -->
+        <div id="batch-server-browser" class="batch-server-browser" hidden>
+          <nav id="batch-crumbs" class="batch-crumbs" aria-label={t.batch.pathAria}></nav>
+          <div class="batch-toolbar">
+            <input id="batch-filter" type="search" placeholder={t.batch.filter} />
+            <button id="batch-pick-folder" class="btn-soft" type="button" title={t.batch.pickFolderTitle}>
+              📂 {t.batch.pickFolder}
+            </button>
+          </div>
+          <ul id="batch-listing" class="batch-listing"></ul>
+        </div>
       </div>
 
       <div class="batch-side">
@@ -58,10 +90,10 @@ const t = useTranslations(Astro.currentLocale)
           <label><span>{t.batch.language}</span>
             <select id="batch-lang"></select>
           </label>
-          <label><span>{t.batch.outputDir}</span>
+          <label id="batch-output-dir-field"><span>{t.batch.outputDir}</span>
             <input id="batch-output-dir" type="text" />
           </label>
-          <label class="batch-check">
+          <label id="batch-recursive-field" class="batch-check">
             <input id="batch-recursive" type="checkbox" checked />
             <span>{t.batch.recursive}</span>
           </label>
@@ -71,11 +103,97 @@ const t = useTranslations(Astro.currentLocale)
           </label>
           <label class="batch-span2"><span>{t.batch.vadThreshold}</span>
             <span class="batch-vad-row">
-              <input id="batch-vad-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.5" />
+              <input id="batch-vad-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.5" disabled />
               <output id="batch-vad-value">0.50</output>
             </span>
           </label>
         </div>
+
+        <details id="batch-style" class="batch-style">
+          <summary>🎨 {t.batch.styleSection}</summary>
+          <p class="batch-hint">{t.batch.styleHint}</p>
+          <div class="batch-options">
+            <label><span>{t.batch.stylePreset}</span>
+              <select id="batch-style-preset" data-style="preset">
+                <option value="" selected>{t.batch.styleNone}</option>
+                <option value="default">default</option>
+                <option value="clean">clean</option>
+                <option value="bold">bold</option>
+                <option value="pop">pop</option>
+                <option value="neon">neon</option>
+                <option value="classic">classic</option>
+                <option value="terminal">terminal</option>
+              </select>
+            </label>
+            <label><span>{t.style.font}</span>
+              <select id="batch-style-font" data-style="font">
+                <option value="" selected>{t.batch.styleNone}</option>
+                <option value="sans">{t.style.fontSans}</option>
+                <option value="serif">{t.style.fontSerif}</option>
+                <option value="rounded">{t.style.fontRounded}</option>
+                <option value="condensed">{t.style.fontCondensed}</option>
+                <option value="mono">{t.style.fontMono}</option>
+              </select>
+            </label>
+            <label><span>{t.batch.alignLabel}</span>
+              <select id="batch-style-align" data-style="align">
+                <option value="" selected>{t.batch.styleNone}</option>
+                <option value="left">{t.batch.alignLeft}</option>
+                <option value="center">{t.batch.alignCenter}</option>
+                <option value="right">{t.batch.alignRight}</option>
+              </select>
+            </label>
+            <label><span>{t.style.position}</span>
+              <select id="batch-style-position" data-style="position">
+                <option value="" selected>{t.batch.styleNone}</option>
+                <option value="top">{t.style.top}</option>
+                <option value="middle">{t.style.mid}</option>
+                <option value="bottom">{t.style.bottom}</option>
+              </select>
+            </label>
+            <label><span>{t.style.size}</span>
+              <span class="batch-vad-row">
+                <input id="batch-style-size" data-style="size" type="range" min="0.5" max="2" step="0.05" value="1" />
+                <output id="batch-style-size-value">1.00</output>
+              </span>
+            </label>
+            <label><span>{t.batch.textColor}</span>
+              <input id="batch-style-color" data-style="color" type="color" value="#ffffff" />
+            </label>
+            <label class="batch-check">
+              <input id="batch-style-bold" data-style="bold" type="checkbox" />
+              <span>{t.style.bold}</span>
+            </label>
+            <label class="batch-check">
+              <input id="batch-style-italic" data-style="italic" type="checkbox" />
+              <span>{t.style.italic}</span>
+            </label>
+            <label class="batch-check">
+              <input id="batch-style-outline" data-style="outline" type="checkbox" />
+              <span>{t.style.outline}</span>
+            </label>
+            <label class="batch-check">
+              <input id="batch-style-bg" data-style="bg" type="checkbox" checked />
+              <span>{t.batch.bgLabel}</span>
+            </label>
+            <label><span>{t.batch.bgColor}</span>
+              <input id="batch-style-bg-color" data-style="bg_color" type="color" value="#06080b" />
+            </label>
+            <label><span>{t.batch.bgOpacity}</span>
+              <span class="batch-vad-row">
+                <input id="batch-style-bg-opacity" data-style="bg_opacity" type="range" min="0" max="1" step="0.05" value="0.84" />
+                <output id="batch-style-bg-opacity-value">0.84</output>
+              </span>
+            </label>
+            <label class="batch-check batch-span2">
+              <input id="batch-word-anim" data-style="word_animation" type="checkbox" />
+              <span>{t.batch.wordAnim}</span>
+            </label>
+            <label class="batch-span2"><span>{t.batch.highlightColor}</span>
+              <input id="batch-style-highlight" data-style="highlight_color" type="color" value="#b8f060" />
+            </label>
+          </div>
+        </details>
 
         <div class="batch-actions">
           <button id="batch-start" class="btn-primary" type="button">{t.batch.start}</button>
@@ -85,6 +203,7 @@ const t = useTranslations(Astro.currentLocale)
     </div>
 
     <div id="batch-files" class="batch-files"></div>
+    <div id="batch-downloads" class="batch-downloads" hidden></div>
     <div class="batch-statusbar">
       <p id="batch-status" class="batch-status" role="status" aria-live="polite"></p>
       <p id="batch-times" class="batch-times"></p>
@@ -102,11 +221,36 @@ const t = useTranslations(Astro.currentLocale)
   }
   .batch-head { display: flex; align-items: center; justify-content: space-between; }
   .batch-head h2 { font-size: 1.1rem; }
+  .batch-head-tools { display: flex; align-items: center; gap: 0.6rem; }
   .batch-columns { display: grid; grid-template-columns: 1.1fr 1fr; gap: 1rem; }
   @media (max-width: 720px) { .batch-columns { grid-template-columns: 1fr; } }
 
   /* ── Browser ── */
   .batch-browser { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+  .batch-mode-badge {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+    border: 1px solid #2e3a52; border-radius: 999px; padding: 0.12rem 0.55rem;
+    vertical-align: middle; margin-left: 0.4rem; color: #8fa3c8;
+  }
+  .batch-mode-badge.is-server { border-color: #b8f060; color: #d9f7ac; }
+  .batch-client-picker {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.8rem; text-align: center; padding: 1.2rem;
+    border: 1.5px dashed rgb(255 255 255 / 0.15); border-radius: 10px; min-height: 280px;
+  }
+  .batch-client-picker .batch-hint { max-width: 34ch; }
+  .batch-server-browser { flex: 1; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+  .batch-server-browser[hidden], .batch-client-picker[hidden] { display: none; }
+  .batch-downloads { display: flex; flex-direction: column; gap: 0.3rem; }
+  .batch-downloads[hidden] { display: none; }
+  .batch-downloads h3 { font-size: 0.85rem; opacity: 0.85; margin-bottom: 0.2rem; }
+  .batch-downloads a {
+    display: flex; align-items: center; gap: 0.6rem; font-size: 0.82rem; color: #b8f060;
+    text-decoration: none; padding: 0.3rem 0.6rem; border: 1px solid rgb(184 240 96 / 0.25);
+    border-radius: 8px;
+  }
+  .batch-downloads a:hover { background: rgb(184 240 96 / 0.08); }
+  .batch-downloads .dl-size { margin-left: auto; opacity: 0.55; font-size: 0.74rem; }
   .batch-crumbs { display: flex; flex-wrap: wrap; gap: 0.15rem; align-items: center; font-size: 0.78rem; min-height: 1.4em; }
   .batch-crumbs button {
     background: none; border: 0; color: #8fa3c8; cursor: pointer; padding: 0.1rem 0.25rem;
@@ -120,7 +264,10 @@ const t = useTranslations(Astro.currentLocale)
     padding: 0.35rem 0.6rem; color: #c3cbdd; font: inherit; font-size: 0.82rem;
   }
   .batch-listing {
-    list-style: none; margin: 0; padding: 0.25rem; height: 280px; overflow: auto;
+    /* Fill the column: the browser stretches to the height of the options
+       side, so the listing must absorb the leftover space instead of leaving
+       a hole under a fixed height. */
+    list-style: none; margin: 0; padding: 0.25rem; flex: 1 1 280px; min-height: 280px; overflow: auto;
     border: 1px solid rgb(255 255 255 / 0.1); border-radius: 10px; font-size: 0.85rem;
   }
   .batch-listing li {
@@ -131,6 +278,13 @@ const t = useTranslations(Astro.currentLocale)
   .batch-listing li.is-selected { background: rgb(99 102 241 / 0.25); }
   .batch-listing .row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .batch-listing .size { margin-left: auto; opacity: 0.55; font-size: 0.75rem; flex: none; }
+  .batch-listing .row-expand {
+    flex: none; width: 1.3rem; height: 1.3rem; border-radius: 4px; border: 0;
+    background: none; color: #8fa3c8; cursor: pointer; font-size: 0.8rem; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .batch-listing .row-expand:hover { background: rgb(255 255 255 / 0.1); color: #dfe6f3; }
+  .batch-listing .row-expand--spacer { visibility: hidden; cursor: default; }
   .batch-listing .row-add {
     flex: none; width: 1.6rem; height: 1.6rem; border-radius: 6px; border: 1px solid #2e3a52;
     background: #141926; color: #b8f060; cursor: pointer; font-size: 0.95rem; line-height: 1;
@@ -141,7 +295,7 @@ const t = useTranslations(Astro.currentLocale)
   .batch-side { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
   .batch-side h3 { font-size: 0.9rem; opacity: 0.85; }
   .batch-queue {
-    list-style: none; margin: 0; padding: 0.25rem; min-height: 56px; max-height: 140px; overflow: auto;
+    list-style: none; margin: 0; padding: 0.25rem; height: 140px; overflow: auto;
     border: 1px dashed rgb(255 255 255 / 0.15); border-radius: 10px; font-size: 0.8rem;
   }
   .batch-queue li {
@@ -176,6 +330,18 @@ const t = useTranslations(Astro.currentLocale)
   .batch-options { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.8rem; font-size: 0.8rem; }
   .batch-options label { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
   .batch-options label > span:first-child { opacity: 0.75; }
+  /* Share the label/control rows across each pair of fields so a long label
+     (e.g. "Carpeta de salida (vacío = junto a cada archivo)") can't push its
+     control lower than its neighbour's. */
+  @supports (grid-template-rows: subgrid) {
+    .batch-options label:not(.batch-check) {
+      display: grid;
+      grid-template-rows: subgrid;
+      grid-row: span 2;
+      row-gap: 0.25rem;
+    }
+    .batch-options label:not(.batch-check) > span:first-child { align-self: end; }
+  }
   .batch-options select, .batch-options input[type="text"] {
     background-color: #0e1118; border: 1px solid #1c2234; color: #c3cbdd;
     border-radius: 8px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.82rem;
@@ -185,6 +351,14 @@ const t = useTranslations(Astro.currentLocale)
   .batch-check { flex-direction: row !important; align-items: center; gap: 0.45rem !important; }
   .batch-vad-row { display: flex; align-items: center; gap: 0.6rem; }
   .batch-vad-row input { flex: 1; }
+  .batch-style { border: 1px solid rgb(255 255 255 / 0.1); border-radius: 10px; padding: 0.5rem 0.7rem; }
+  .batch-style summary { cursor: pointer; font-size: 0.82rem; opacity: 0.85; user-select: none; }
+  .batch-style[open] summary { margin-bottom: 0.5rem; }
+  .batch-style .batch-hint { display: block; margin-bottom: 0.5rem; }
+  .batch-style input[type="color"] {
+    background: #0e1118; border: 1px solid #1c2234; border-radius: 8px;
+    padding: 0.1rem; height: 2rem; width: 100%;
+  }
   .batch-actions { display: flex; gap: 0.6rem; margin-top: auto; }
 
   /* ── Progress rows + status ── */

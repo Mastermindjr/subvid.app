@@ -1,6 +1,9 @@
 # Core
 faster-whisper>=1.1.0
 
+# Japanese -> romaji transliteration for translated subtitles
+pykakasi>=2.2
+
 # Local engine server (integrates with the web UI)
 fastapi>=0.115
 uvicorn>=0.30
@@ -11,3 +14,22 @@ python-multipart>=0.0.9
 # If you only want CPU, you can remove these two lines.
 nvidia-cublas-cu12; platform_system == "Windows" or platform_system == "Linux"
 nvidia-cudnn-cu12>=9; platform_system == "Windows" or platform_system == "Linux"
+
+# GPU (Apple Silicon) — Whisper on the M-series GPU via Apple's MLX framework.
+# Picked up automatically when device = "auto" (translation stays on CPU:
+# CTranslate2 has no Metal backend, and the ANE is not exposed to third-party
+# frameworks by Apple).
+mlx-whisper>=0.4; platform_system == "Darwin" and platform_machine == "arm64"
+
+# GPU (AMD / Intel, dedicated or integrated) — Whisper on any Vulkan-capable
+# GPU via whisper.cpp (pywhispercpp). The PyPI wheels are CPU-only, so build
+# the package locally with the Vulkan backend enabled (needs the Vulkan SDK
+# from https://vulkan.lunarg.com/ plus CMake and a C++ compiler):
+#
+#   Windows (PowerShell):  $env:GGML_VULKAN = "1"
+#                          pip install pywhispercpp --no-binary pywhispercpp
+#   Linux/macOS:           GGML_VULKAN=1 pip install pywhispercpp --no-binary pywhispercpp
+#
+# Once installed, device = "auto" uses it whenever no NVIDIA GPU is present,
+# or force it with --device vulkan. Translation (NLLB) stays on CPU int8:
+# CTranslate2 only accelerates on CUDA.

@@ -263,10 +263,15 @@ export function createConfigStageController({
     if (!asrReadyPromise) {
       asrReadyPromise = (async () => {
         updateDownloadStatus("asr", "downloading")
-        await transformersClient.call("ensure-asr", {
-          model: ASR_MODEL,
-          webgpu: hasWebGPU,
-        })
+        try {
+          await transformersClient.call("ensure-asr", {
+            model: ASR_MODEL,
+            webgpu: hasWebGPU,
+          })
+        } catch (error) {
+          updateDownloadStatus("asr", "error")
+          throw error
+        }
         asrReady = true
         updateDownloadStatus("asr", "ready")
       })().finally(() => {

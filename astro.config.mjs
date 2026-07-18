@@ -17,7 +17,7 @@ export default defineConfig({
   adapter: cloudflare(),
   i18n: {
     locales: ['en', 'es'],
-    defaultLocale: 'en',
+    defaultLocale: 'es',
     routing: {
       prefixDefaultLocale: false
     }
@@ -25,7 +25,7 @@ export default defineConfig({
   integrations: [
     sitemap({
       i18n: {
-        defaultLocale: 'en',
+        defaultLocale: 'es',
         locales: { en: 'en', es: 'es' }
       }
     })

@@ -1,4 +1,4 @@
-export const defaultLang = "en" as const
+export const defaultLang = "es" as const
 
 // Display names for the language switcher.
 export const languages = {

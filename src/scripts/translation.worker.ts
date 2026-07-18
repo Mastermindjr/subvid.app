@@ -12,7 +12,9 @@
 import { env, pipeline } from "@huggingface/transformers"
 
 env.allowLocalModels = false
-env.useBrowserCache = true
+// Cache API is only available in secure contexts (https / localhost); over
+// plain http on a LAN the model must load without caching instead of failing.
+env.useBrowserCache = typeof caches !== "undefined"
 
 let translator: any = null
 let translatorModel = ""

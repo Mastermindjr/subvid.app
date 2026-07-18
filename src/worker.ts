@@ -77,7 +77,11 @@ export default {
   fetch(request, env, context) {
     const { pathname } = new URL(request.url)
 
-    if (pathname === "/") {
+    // Only redirect real page navigations. In-page fetches (e.g. the
+    // client-side language switcher downloading a locale's HTML) must get
+    // the page they asked for, regardless of the locale cookie.
+    const fetchMode = request.headers.get("Sec-Fetch-Mode") ?? "navigate"
+    if (pathname === "/" && fetchMode === "navigate") {
       const redirect = localeRedirect(request)
       if (redirect) return redirect
     }

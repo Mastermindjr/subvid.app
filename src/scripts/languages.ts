@@ -12,10 +12,22 @@ export const MARIAN_TRANSLATION_MODELS: Record<string, string> = {
   "pt:en": "Xenova/opus-mt-pt-en",
   "en:it": "Xenova/opus-mt-en-it",
   "it:en": "Xenova/opus-mt-it-en",
-  "en:nl": "Xenova/opus-mt-en-nl",
-  "nl:en": "Xenova/opus-mt-nl-en",
   "en:ru": "Xenova/opus-mt-en-ru",
   "ru:en": "Xenova/opus-mt-ru-en",
+}
+
+// Subtitle-language menu order: English and Spanish first, then an "Others"
+// group headed by German/Japanese/Portuguese/Italian, then the remaining
+// languages in their original LANGS order.
+export const PRIMARY_SUBTITLE_LANGS = ["en", "es"] as const
+
+export function orderedSubtitleLangs(): { primary: string[]; others: string[] } {
+  const primary = [...PRIMARY_SUBTITLE_LANGS]
+  const othersHead = ["de", "ja", "pt", "it"]
+  const rest = Object.keys(LANGS).filter(
+    (code) => !primary.includes(code) && !othersHead.includes(code),
+  )
+  return { primary, others: [...othersHead, ...rest] }
 }
 
 export const LANGS = {
@@ -25,13 +37,9 @@ export const LANGS = {
   de: { label: "German", nllb: "deu_Latn" },
   pt: { label: "Portuguese", nllb: "por_Latn" },
   it: { label: "Italian", nllb: "ita_Latn" },
-  nl: { label: "Dutch", nllb: "nld_Latn" },
   ru: { label: "Russian", nllb: "rus_Cyrl" },
   ja: { label: "Japanese", nllb: "jpn_Jpan" },
   ko: { label: "Korean", nllb: "kor_Hang" },
   zh: { label: "Chinese", nllb: "zho_Hans" },
   ar: { label: "Arabic", nllb: "arb_Arab" },
-  hi: { label: "Hindi", nllb: "hin_Deva" },
-  pl: { label: "Polish", nllb: "pol_Latn" },
-  tr: { label: "Turkish", nllb: "tur_Latn" },
 }

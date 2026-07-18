@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """subvid-batch — Batch subtitle generation and muxing for media libraries.
 
-Transcribes video/audio files with faster-whisper (GPU-accelerated when
-available) and attaches the subtitles as a *selectable* track (soft subs)
-via a lossless ffmpeg stream-copy remux — no re-encoding, no quality loss.
-Designed for Jellyfin/Plex-style libraries.
+Transcribes video/audio files with Whisper and attaches the subtitles as a
+*selectable* track (soft subs) via a lossless ffmpeg stream-copy remux — no
+re-encoding, no quality loss. Designed for Jellyfin/Plex-style libraries.
+
+GPU acceleration (--device auto picks the best available backend):
+    cuda    NVIDIA GPUs via faster-whisper/CTranslate2 (works out of the box)
+    mlx     Apple Silicon GPUs via mlx-whisper
+    vulkan  AMD/Intel GPUs (dedicated or integrated) via whisper.cpp
+            (pywhispercpp built with GGML_VULKAN=1 — see requirements.txt)
 
 Examples:
     # Transcribe a whole folder (recursive) and produce .mkv files with a
@@ -16,14 +21,21 @@ Examples:
 
     # Force Spanish, 2 files in parallel, custom output folder:
     python subvid_batch.py video1.mp4 video2.mkv -l es -j 2 -o out/
+
+    # Styled .ass subtitles (web-app presets) and hard-burned subtitles:
+    python subvid_batch.py movie.mkv --style neon --sub-position top
+    python subvid_batch.py movie.mkv --mode burn --style bold --sub-bg-opacity 0.6
 """
 
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import platform
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -85,6 +97,152 @@ class JobCancelled(Exception):
     """Raised inside a transcription when a cancel flag is set."""
 
 
+# ── Child-process lifetime guardrails ────────────────────────────────────────
+# Spawned ffmpeg/ffprobe processes must never outlive this process, no matter
+# how it dies:
+#   - Windows: children are placed in a Job Object with KILL_ON_JOB_CLOSE; the
+#     kernel terminates the whole job when our last handle disappears — this
+#     covers even a hard `taskkill /F` on us.
+#   - Linux: PR_SET_PDEATHSIG makes the kernel SIGKILL the child when we die.
+#   - macOS: no kernel equivalent, so children are tracked and killed from
+#     atexit + termination-signal handlers (everything short of SIGKILL; the
+#     GUI additionally kills the whole process group).
+
+_CHILDREN: set[subprocess.Popen] = set()
+_CHILDREN_LOCK = threading.Lock()
+_WIN_JOB: int | None = None
+
+
+def _windows_job() -> int:
+    """One shared Job Object configured to kill its processes on handle close."""
+    global _WIN_JOB
+    if _WIN_JOB is not None:
+        return _WIN_JOB
+    import ctypes
+    from ctypes import wintypes
+
+    class _BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [(field, ctypes.c_uint64) for field in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+        )]
+
+    class _ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _BasicLimits),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    job = kernel32.CreateJobObjectW(None, None)
+    if job:
+        info = _ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            kernel32.CloseHandle(job)
+            job = 0
+    _WIN_JOB = job or 0
+    return _WIN_JOB
+
+
+def _bind_child_to_parent_linux() -> None:
+    """preexec_fn: the kernel SIGKILLs this child if the parent dies first."""
+    import ctypes
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0)  # PR_SET_PDEATHSIG
+    except OSError:
+        pass
+
+
+def _adopt_child(proc: subprocess.Popen) -> None:
+    with _CHILDREN_LOCK:
+        _CHILDREN.add(proc)
+    if os.name == "nt":
+        job = _windows_job()
+        if job:
+            import ctypes
+            ctypes.WinDLL("kernel32").AssignProcessToJobObject(job, int(proc._handle))  # type: ignore[attr-defined]
+
+
+def _forget_child(proc: subprocess.Popen) -> None:
+    with _CHILDREN_LOCK:
+        _CHILDREN.discard(proc)
+
+
+def _kill_children() -> None:
+    with _CHILDREN_LOCK:
+        procs = list(_CHILDREN)
+    for proc in procs:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+atexit.register(_kill_children)
+
+
+def _install_terminate_guards() -> None:
+    """On termination signals, kill tracked children first, then die normally.
+
+    SIGINT is left alone on purpose: KeyboardInterrupt handling elsewhere
+    (main() here, uvicorn in the server) already takes care of it.
+    """
+    def _handler(signum: int, _frame) -> None:
+        _kill_children()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for name in ("SIGTERM", "SIGBREAK", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            if signal.getsignal(sig) == signal.SIG_DFL:
+                signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            pass  # not the main thread, or signal unsupported
+
+
+def run_child(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    """Like subprocess.run(capture_output=True, text=True), but the child is
+    registered with the guardrails above so it can never outlive us."""
+    kwargs: dict = {}
+    if sys.platform.startswith("linux"):
+        kwargs["preexec_fn"] = _bind_child_to_parent_linux
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs
+    )
+    _adopt_child(proc)
+    try:
+        out, err = proc.communicate()
+    except BaseException:
+        proc.kill()
+        raise
+    finally:
+        _forget_child(proc)
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, out, err)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def load_config(path: Path | None = None) -> dict:
     """Read config.toml (or an explicit --config file). Returns {} if absent."""
     target = path or DEFAULT_CONFIG_PATH
@@ -122,6 +280,67 @@ def _enable_windows_cuda_dlls() -> None:
                 pass
 
 
+def is_apple_silicon() -> bool:
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def mlx_available() -> bool:
+    """True when the MLX backend (Apple Silicon GPU via mlx-whisper) is usable."""
+    if not is_apple_silicon():
+        return False
+    try:
+        import mlx_whisper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def ct2_cuda_available() -> bool:
+    """True when CTranslate2 sees at least one CUDA (NVIDIA) device."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
+def _whispercpp_gpu_flags() -> set[str]:
+    """GPU backends compiled into pywhispercpp (whisper.cpp), e.g. {"vulkan"}.
+
+    Parsed from whisper.cpp's system-info string; empty when pywhispercpp is
+    missing or is a CPU-only build.
+    """
+    try:
+        from pywhispercpp.model import Model
+        info = str(Model.system_info() or "")
+    except Exception:
+        return set()
+    flags: set[str] = set()
+    # Old builds print "VULKAN = 1"; newer ggml prints one "Vulkan : …" section
+    # per compiled backend. Accept the name unless it is explicitly "= 0".
+    for name in ("VULKAN", "CUDA", "METAL", "SYCL", "HIP", "OPENCL"):
+        if re.search(rf"\b{name}\b(?!\s*=\s*0)", info, re.IGNORECASE):
+            flags.add(name.lower())
+    return flags
+
+
+def vulkan_available() -> bool:
+    """True when pywhispercpp has a GPU backend for AMD/Intel (Vulkan/SYCL/HIP)."""
+    return bool(_whispercpp_gpu_flags() - {"cuda", "metal"})
+
+
+# Standard Whisper model names -> pre-converted MLX repos (Apple GPU).
+# Anything not in this map is passed through as a Hugging Face repo id.
+MLX_WHISPER_REPOS = {
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+}
+
+
 def format_srt_time(seconds: float) -> str:
     seconds = max(0.0, seconds)
     ms = round(seconds * 1000)
@@ -129,6 +348,35 @@ def format_srt_time(seconds: float) -> str:
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+# ── Japanese romaji transliteration ─────────────────────────────────────────
+# Subtitles translated *into* Japanese are emitted in Hepburn romaji instead
+# of kanji/kana (configurable via [translation].romaji_ja).
+
+ROMAJI_JA = True
+
+_kakasi = None
+_romaji_warned = False
+
+
+def to_romaji(text: str) -> str:
+    """Transliterate Japanese text to Hepburn romaji. Needs pykakasi; the
+    original text is returned untouched when it is not installed."""
+    global _kakasi, _romaji_warned
+    if _kakasi is None:
+        try:
+            import pykakasi
+        except ImportError:
+            if not _romaji_warned:
+                _romaji_warned = True
+                print("warning: pykakasi is not installed; Japanese subtitles keep the native "
+                      "script (pip install pykakasi)", file=sys.stderr)
+            return text
+        _kakasi = pykakasi.kakasi()
+    parts = _kakasi.convert(text)
+    romaji = " ".join(p["hepburn"].strip() for p in parts if p.get("hepburn", "").strip())
+    return romaji or text
 
 
 # Subtitle line shaping (mirrors the web app's heuristics): break on silences,
@@ -189,6 +437,156 @@ def segments_to_srt(segments: list[dict]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+# ── Styled ASS subtitles ─────────────────────────────────────────────────────
+# Mirrors the web app's subtitle visualizer: the same presets and knobs (font,
+# size, color, background box + opacity, outline, position, alignment) are
+# rendered into the [V4+ Styles] header, so a sidecar/muxed .ass looks like the
+# web preview. Word animation ("karaoke") adds \k tags on top of the style.
+
+# Web font stacks -> concrete font names that exist on typical player systems.
+ASS_FONTS = {
+    "sans": "Arial",
+    "serif": "Georgia",
+    "rounded": "Trebuchet MS",
+    "condensed": "Arial Narrow",
+    "mono": "Consolas",
+}
+
+# Baseline = the web app's default caption style.
+DEFAULT_STYLE = {
+    "font": "sans",           # key of ASS_FONTS, or a literal font name
+    "size": 1.0,              # multiplier over the base size (72px @ 1080p)
+    "color": "#ffffff",       # text color
+    "bold": False,
+    "italic": False,
+    "align": "center",        # left / center / right
+    "position": "bottom",     # top / middle / bottom
+    "bg": True,               # opaque box behind the text
+    "bg_color": "#06080b",
+    "bg_opacity": 0.84,       # 0.0 transparent … 1.0 solid
+    "outline": False,         # black outline when the box is disabled
+    "highlight_color": "#b8f060",  # spoken-word color in karaoke mode
+}
+
+# Same presets as the web visualizer (values are overrides on DEFAULT_STYLE).
+STYLE_PRESETS = {
+    "default": {},
+    "clean": {"bg": False, "outline": True},
+    "bold": {"size": 1.12, "bold": True, "bg_color": "#000000", "bg_opacity": 1.0},
+    "pop": {"font": "rounded", "size": 1.06, "color": "#fde047", "bold": True,
+            "bg": False, "outline": True},
+    "neon": {"color": "#b8f060", "bold": True, "bg_opacity": 0.55},
+    "classic": {"font": "serif", "bg": False, "outline": True},
+    "terminal": {"font": "mono", "size": 0.92, "bg_color": "#0a0d12", "bg_opacity": 0.9},
+}
+
+
+def _hex_to_ass(hex_color: str, opacity: float = 1.0) -> str:
+    """#RRGGBB -> ASS &HAABBGGRR (AA: 00 = opaque, FF = fully transparent)."""
+    h = str(hex_color or "#ffffff").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        n = int(h, 16)
+    except ValueError:
+        n = 0xFFFFFF
+    r, g, b = (n >> 16) & 255, (n >> 8) & 255, n & 255
+    a = max(0, min(255, round((1.0 - float(opacity)) * 255)))
+    return f"&H{a:02X}{b:02X}{g:02X}{r:02X}"
+
+
+def build_ass_header(style: dict, karaoke: bool) -> str:
+    font = ASS_FONTS.get(style.get("font", "sans"), str(style.get("font") or "Arial"))
+    size = max(24, round(72 * float(style.get("size", 1.0))))
+    color = _hex_to_ass(style.get("color", "#ffffff"))
+    if karaoke:
+        # SecondaryColour = not yet spoken, PrimaryColour = spoken (\k flips them).
+        primary = _hex_to_ass(style.get("highlight_color", "#b8f060"))
+        secondary = color
+    else:
+        primary, secondary = color, "&H00FFFFFF"
+    if style.get("bg", True):
+        border_style, outline_w, shadow = 3, 3, 0  # BorderStyle 3 = opaque box
+        back = _hex_to_ass(style.get("bg_color", "#06080b"), float(style.get("bg_opacity", 0.84)))
+    else:
+        border_style, shadow = 1, 1
+        outline_w = 3 if style.get("outline") else 1
+        back = "&H80000000"
+    base = {"bottom": 1, "middle": 4, "top": 7}.get(str(style.get("position", "bottom")), 1)
+    offset = {"left": 0, "center": 1, "right": 2}.get(str(style.get("align", "center")), 1)
+    alignment = base + offset
+    bold = -1 if style.get("bold") else 0
+    italic = -1 if style.get("italic") else 0
+    return f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{font},{size},{primary},{secondary},&H00101010,{back},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},{shadow},{alignment},60,60,50,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+
+def format_ass_time(seconds: float) -> str:
+    cs = max(0, round(seconds * 100))
+    h, rem = divmod(cs, 360_000)
+    m, rem = divmod(rem, 6_000)
+    s, cs = divmod(rem, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _ass_escape(text: str) -> str:
+    return str(text).replace("\\", "\\\\").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def _karaoke_text(seg: dict) -> str:
+    words = seg.get("words") or []
+    if not words:
+        # Translated tracks carry no word timestamps: approximate each word's
+        # duration by its share of the line's characters.
+        tokens = [t for t in str(seg["text"]).split() if t]
+        if not tokens:
+            return _ass_escape(seg["text"])
+        total_cs = max(len(tokens), round((seg["end"] - seg["start"]) * 100))
+        weights = [len(t) + 1 for t in tokens]
+        weight_sum = sum(weights)
+        parts, used = [], 0
+        for i, (token, weight) in enumerate(zip(tokens, weights)):
+            dur = total_cs - used if i == len(tokens) - 1 else max(1, round(total_cs * weight / weight_sum))
+            used += dur
+            parts.append(f"{{\\k{dur}}}{_ass_escape(token)} ")
+        return "".join(parts).rstrip()
+
+    parts = []
+    line_start = seg["start"]
+    for i, word in enumerate(words):
+        w_start = max(line_start, word["start"])
+        if i == 0 and w_start > line_start:
+            parts.append(f"{{\\k{round((w_start - line_start) * 100)}}}")
+        # Extend each word until the next one starts so highlights never gap.
+        w_end = words[i + 1]["start"] if i + 1 < len(words) else word["end"]
+        dur = max(1, round((max(w_start, w_end) - w_start) * 100))
+        parts.append(f"{{\\k{dur}}}{_ass_escape(word['text'])} ")
+    return "".join(parts).rstrip()
+
+
+def segments_to_ass(segments: list[dict], style: dict | None = None, karaoke: bool = True) -> str:
+    lines = [build_ass_header(style or DEFAULT_STYLE, karaoke)]
+    for seg in segments:
+        text = _karaoke_text(seg) if karaoke else _ass_escape(seg["text"])
+        lines.append(
+            f"Dialogue: 0,{format_ass_time(seg['start'])},{format_ass_time(seg['end'])},"
+            f"Default,,0,0,0,,{text}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def collect_inputs(paths: list[str], recursive: bool, exclude_dir: str | None = None) -> list[Path]:
     """Gather media files. Anything inside `exclude_dir` (the output folder)
     is ignored so previous outputs are never re-ingested as inputs."""
@@ -240,9 +638,9 @@ def dedupe_output_collisions(files: list[Path], args: argparse.Namespace) -> lis
 def has_subvid_marker(path: Path) -> bool:
     """True if the file was produced by our own mux (container comment tag)."""
     try:
-        out = subprocess.run(
+        out = run_child(
             ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", str(path)],
-            capture_output=True, text=True, check=True,
+            check=True,
         ).stdout
         tags = (json.loads(out).get("format", {}) or {}).get("tags", {}) or {}
         comment = next((v for k, v in tags.items() if k.lower() == "comment"), "")
@@ -251,12 +649,41 @@ def has_subvid_marker(path: Path) -> bool:
         return False
 
 
+def decode_audio_mono_16k(path: Path):
+    """Decode a media file's audio to 16 kHz mono float32 samples (numpy).
+
+    Same job ffmpeg does inside faster-whisper; needed for whisper.cpp, which
+    only accepts raw samples (or 16 kHz WAV files) as input. The child follows
+    the lifetime guardrails above.
+    """
+    import numpy as np
+
+    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-vn",
+           "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", "16000", "-"]
+    kwargs: dict = {}
+    if sys.platform.startswith("linux"):
+        kwargs["preexec_fn"] = _bind_child_to_parent_linux
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    _adopt_child(proc)
+    try:
+        out, err = proc.communicate()
+    except BaseException:
+        proc.kill()
+        raise
+    finally:
+        _forget_child(proc)
+    if proc.returncode != 0:
+        detail = err.decode(errors="replace").strip().splitlines()
+        raise RuntimeError(f"ffmpeg audio decode failed: {detail[-1] if detail else proc.returncode}")
+    return np.frombuffer(out, dtype=np.float32)
+
+
 def ffprobe_subtitle_stream_count(path: Path) -> int:
     try:
-        out = subprocess.run(
+        out = run_child(
             ["ffprobe", "-v", "error", "-select_streams", "s",
              "-show_entries", "stream=index", "-of", "json", str(path)],
-            capture_output=True, text=True, check=True,
+            check=True,
         ).stdout
         return len(json.loads(out).get("streams", []))
     except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
@@ -299,11 +726,48 @@ def mux_subtitles(
         str(tmp),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        run_child(cmd, check=True)
         tmp.replace(output)
     except subprocess.CalledProcessError as e:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"ffmpeg mux failed: {e.stderr.strip().splitlines()[-1] if e.stderr else e}") from e
+
+
+def _ass_filter_path(path: Path) -> str:
+    """Escape a filename for use inside an ffmpeg filter argument."""
+    return (
+        str(path)
+        .replace("\\", "/")
+        .replace(":", "\\:")
+        .replace(",", "\\,")
+        .replace("'", "\\'")
+    )
+
+
+def burn_subtitles(source: Path, ass_file: Path, output: Path) -> None:
+    """Re-encode the video with the subtitles burned into the image (hard subs).
+
+    This is the CLI equivalent of the web app's video export: the styled .ass
+    is rendered onto every frame, so it plays anywhere — at the cost of a full
+    re-encode (much slower than mux/sidecar and slightly lossy).
+    """
+    tmp = output.with_name(f"{output.name}.{uuid.uuid4().hex[:8]}.part")
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source),
+        "-vf", f"ass={_ass_filter_path(ass_file)}",
+        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+        "-c:a", "copy",
+        "-metadata", f"comment={SUBVID_TAG}",
+        "-f", "mp4" if output.suffix.lower() == ".mp4" else "matroska",
+        str(tmp),
+    ]
+    try:
+        run_child(cmd, check=True)
+        tmp.replace(output)
+    except subprocess.CalledProcessError as e:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg burn failed: {e.stderr.strip().splitlines()[-1] if e.stderr else e}") from e
 
 
 class Transcriber:
@@ -313,10 +777,38 @@ class Transcriber:
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
+        self.backend = "ct2"
         self._model = None
         self._lock = threading.Lock()
+        # GPU inference (MLX / whisper.cpp) is serialized: the GPU is a single
+        # shared queue and neither library makes thread-safety promises.
+        self._gpu_lock = threading.Lock()
 
     def _load(self):
+        device = self.device
+        if device == "auto":
+            if mlx_available():
+                device = "mlx"
+            elif not ct2_cuda_available() and vulkan_available():
+                # No NVIDIA GPU, but pywhispercpp has a Vulkan/SYCL/HIP build:
+                # use the AMD/Intel GPU instead of falling back to CPU.
+                device = "vulkan"
+        if device == "vulkan":
+            return self._load_whispercpp()
+        if device == "mlx":
+            if not is_apple_silicon():
+                raise RuntimeError("--device mlx requires an Apple Silicon Mac")
+            try:
+                import mlx_whisper  # noqa: F401
+            except ImportError as e:
+                raise RuntimeError(
+                    "mlx-whisper is not installed — run: pip install mlx-whisper"
+                ) from e
+            self.backend = "mlx"
+            repo = MLX_WHISPER_REPOS.get(self.model_name, self.model_name)
+            log("model", f"using MLX backend on the Apple Silicon GPU: '{repo}'")
+            return repo
+
         from faster_whisper import WhisperModel
         from faster_whisper.utils import download_model
 
@@ -333,11 +825,11 @@ class Transcriber:
         device = self.device
         compute = self.compute_type
         if device == "auto":
-            try:
-                import ctranslate2
-                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-            except Exception:
-                device = "cpu"
+            device = "cuda" if ct2_cuda_available() else "cpu"
+            if device == "cpu" and not sys.platform == "darwin":
+                log("model", "no GPU detected — running on CPU. If this machine has an "
+                             "AMD/Intel GPU, install pywhispercpp with Vulkan and use "
+                             "--device vulkan (see cli/requirements.txt)")
         if compute == "auto":
             compute = "float16" if device == "cuda" else "int8"
 
@@ -367,7 +859,16 @@ class Transcriber:
         on_progress=None,
         cancel_check=None,
     ) -> tuple[str, list[dict]]:
-        segments_iter, info = self.model.transcribe(
+        model = self.model  # lazy load; also resolves self.backend
+        if self.backend == "mlx":
+            return self._transcribe_mlx(
+                model, path, language, task, name, vad_options, on_progress, cancel_check,
+            )
+        if self.backend == "whispercpp":
+            return self._transcribe_whispercpp(
+                model, path, language, task, name, vad_options, on_progress, cancel_check,
+            )
+        segments_iter, info = model.transcribe(
             str(path),
             language=language,
             task=task,
@@ -412,6 +913,178 @@ class Transcriber:
             segments = words_to_lines(words)
         return detected, segments
 
+    def _transcribe_mlx(
+        self,
+        repo: str,
+        path: Path,
+        language: str | None,
+        task: str,
+        name: str,
+        vad_options: dict | None,
+        on_progress,
+        cancel_check,
+    ) -> tuple[str, list[dict]]:
+        """Apple Silicon GPU path via mlx-whisper.
+
+        mlx-whisper returns the whole result at once (no segment iterator), so
+        progress is coarse and a cancel only takes effect between files.
+        """
+        import mlx_whisper
+
+        if vad_options is not None:
+            log(name, "note: VAD filtering is not supported on the MLX backend; continuing without it")
+        if cancel_check and cancel_check():
+            raise JobCancelled()
+        started = time.monotonic()
+        with self._gpu_lock:
+            result = mlx_whisper.transcribe(
+                str(path),
+                path_or_hf_repo=repo,
+                language=language,
+                task=task,
+                word_timestamps=True,
+                condition_on_previous_text=False,
+                verbose=None,
+            )
+        if cancel_check and cancel_check():
+            raise JobCancelled()
+
+        detected = result.get("language") or language or "und"
+        segments: list[dict] = []
+        words: list[dict] = []
+        for seg in result.get("segments") or []:
+            text = str(seg.get("text", "")).strip()
+            if not text:
+                continue
+            segments.append({"start": seg["start"], "end": seg["end"], "text": text})
+            for w in seg.get("words") or []:
+                word_text = str(w.get("word", "")).strip()
+                if word_text:
+                    words.append({"start": w["start"], "end": w["end"], "text": word_text})
+
+        duration = segments[-1]["end"] if segments else 0.0
+        elapsed = time.monotonic() - started
+        speed = duration / elapsed if elapsed else 0.0
+        log(name, f"language={detected}, duration={duration/60:.1f} min ({speed:.1f}x realtime on MLX)")
+        if on_progress:
+            on_progress(100, speed)
+        if words:
+            segments = words_to_lines(words)
+        return detected, segments
+
+    def _load_whispercpp(self):
+        """AMD/Intel GPU backend: whisper.cpp via pywhispercpp (Vulkan/SYCL/HIP)."""
+        try:
+            from pywhispercpp.model import Model as WhisperCppModel
+        except ImportError as e:
+            raise RuntimeError(
+                "--device vulkan requires pywhispercpp — install it with Vulkan support "
+                "(see the AMD/Intel section in cli/requirements.txt)"
+            ) from e
+
+        gpu = _whispercpp_gpu_flags()
+        if gpu:
+            log("model", f"using whisper.cpp backend on the GPU ({', '.join(sorted(gpu))})")
+        else:
+            log("model", "warning: this pywhispercpp build reports no GPU backend and will "
+                         "run on CPU — reinstall with GGML_VULKAN=1 (see cli/requirements.txt)")
+
+        self.backend = "whispercpp"
+        log("model", f"loading '{self.model_name}' (ggml)…")
+        try:
+            return WhisperCppModel(
+                self.model_name,
+                print_realtime=False,
+                print_progress=False,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"whisper.cpp could not load '{self.model_name}': {e}. Use a standard "
+                "model name (tiny/base/small/medium/large-v3/large-v3-turbo) or a path "
+                "to a ggml .bin file."
+            ) from e
+
+    def _transcribe_whispercpp(
+        self,
+        model,
+        path: Path,
+        language: str | None,
+        task: str,
+        name: str,
+        vad_options: dict | None,
+        on_progress,
+        cancel_check,
+    ) -> tuple[str, list[dict]]:
+        """AMD/Intel GPU path via whisper.cpp.
+
+        Word-level timing comes from token timestamps with one word per
+        segment (max_len=1 + split_on_word), then the usual line regrouping.
+        A cancel only takes effect between files.
+        """
+        if vad_options is not None:
+            log(name, "note: VAD filtering is not supported on the whisper.cpp backend; continuing without it")
+        if cancel_check and cancel_check():
+            raise JobCancelled()
+
+        # whisper.cpp only takes raw 16 kHz samples, so decode with ffmpeg
+        # ourselves (this also gives us the duration for progress reporting).
+        audio = decode_audio_mono_16k(path)
+        duration = len(audio) / 16000.0
+        started = time.monotonic()
+        progress = {"next": 10}
+
+        def on_new_segment(seg) -> None:
+            if not duration:
+                return
+            end = seg.t1 / 100.0
+            pct = min(100.0, end / duration * 100)
+            elapsed = time.monotonic() - started
+            speed = end / elapsed if elapsed else 0.0
+            if on_progress:
+                on_progress(pct, speed)
+            if pct >= progress["next"]:
+                log(name, f"transcribing… {pct:.0f}% ({speed:.1f}x realtime)")
+                progress["next"] = (int(pct // 10) + 1) * 10
+
+        with self._gpu_lock:
+            raw_segments = model.transcribe(
+                audio,
+                language=language or "auto",
+                translate=(task == "translate"),
+                token_timestamps=True,
+                split_on_word=True,
+                max_len=1,
+                new_segment_callback=on_new_segment,
+                abort_callback=(lambda: bool(cancel_check())) if cancel_check else None,
+            )
+        if cancel_check and cancel_check():
+            raise JobCancelled()
+
+        detected = language or "und"
+        if not language:
+            # whisper.cpp keeps the detected language on its context; reading it
+            # is best-effort across pywhispercpp versions.
+            try:
+                import _pywhispercpp as _pw
+                detected = _pw.whisper_lang_str(_pw.whisper_full_lang_id(model._ctx)) or detected
+            except Exception:
+                pass
+
+        words: list[dict] = []
+        for seg in raw_segments:
+            text = str(seg.text).strip()
+            if text:
+                words.append({"start": seg.t0 / 100.0, "end": seg.t1 / 100.0, "text": text})
+
+        segments = words_to_lines(words) if words else []
+        total = duration or (segments[-1]["end"] if segments else 0.0)
+        elapsed = time.monotonic() - started
+        speed = total / elapsed if elapsed else 0.0
+        log(name, f"language={detected}, duration={total/60:.1f} min ({speed:.1f}x realtime on whisper.cpp)")
+        if on_progress:
+            on_progress(100, speed)
+        return detected, segments
+
 
 class Translator:
     """Lazy, shared NLLB-200 translator on CTranslate2 (same runtime as Whisper).
@@ -440,11 +1113,11 @@ class Translator:
             path = snapshot_download(self.model_repo)
 
         device = self.device
-        if device == "auto":
-            try:
-                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-            except Exception:
-                device = "cpu"
+        # CTranslate2 only accelerates on CUDA (no Metal/Vulkan backend): when
+        # transcription runs on mlx or vulkan, NLLB falls back to CPU int8
+        # (NEON/Accelerate or AVX2/oneDNN).
+        if device in ("auto", "mlx", "vulkan"):
+            device = "cuda" if ct2_cuda_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
         log("translator", f"loading NLLB on {device} ({compute})…")
         try:
@@ -487,6 +1160,8 @@ class Translator:
                 hyp = hyp[1:]
             ids = [tok.token_to_id(t) for t in hyp]
             out.append(tok.decode([i for i in ids if i is not None]).strip())
+        if tgt == "ja" and ROMAJI_JA:
+            out = [to_romaji(text) for text in out]
         return out
 
     def translate_segments(self, segments: list[dict], src: str, tgt: str) -> list[dict]:
@@ -501,11 +1176,11 @@ def extract_audio_track(path: Path, track: int, out_dir: Path) -> Path:
     """Extract one specific audio stream to a temp WAV (for --audio-track)."""
     tmp = out_dir / f".{path.stem}.a{track}.{uuid.uuid4().hex[:6]}.wav"
     try:
-        subprocess.run(
+        run_child(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
              "-i", str(path), "-map", f"0:a:{track}",
              "-ac", "1", "-ar", "16000", str(tmp)],
-            check=True, capture_output=True, text=True,
+            check=True,
         )
     except subprocess.CalledProcessError as e:
         tmp.unlink(missing_ok=True)
@@ -543,19 +1218,32 @@ def process_file(
     out_dir = Path(args.output_dir) if args.output_dir else path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # "auto" keeps the original container when it can hold text subtitles
+    # Word animation and custom styling write .ass files, which MP4 cannot
+    # embed (only MKV can).
+    use_karaoke = bool(getattr(args, "word_animation", False))
+    use_ass = use_karaoke or bool(getattr(args, "styled_ass", False))
+
+    # "auto" keeps the original container when it can hold the subtitles
     # (MP4 uses mov_text, MKV uses SRT); anything else is remuxed into MKV,
-    # the safest container for subtitle tracks.
+    # the safest container for subtitle tracks. Styled/karaoke tracks need
+    # ASS, so auto switches MP4 sources to MKV instead of silently muxing a
+    # plain-text track; forcing --container mp4 keeps the old behavior.
     if args.container == "auto":
         ext = path.suffix.lower()
-        container = "mp4" if ext in (".mp4", ".m4v", ".mov") else "mkv"
+        container = "mp4" if ext in (".mp4", ".m4v", ".mov") and not use_ass else "mkv"
     else:
         container = args.container
+
+    # With an explicit MP4 container the muxed track falls back to plain
+    # text (the sidecar stays .ass).
+    mux_ass = use_ass and container != "mp4"
+    sub_ext = ".ass" if use_ass else ".srt"
+    mux_ext = ".ass" if mux_ass else ".srt"
 
     # Predict output paths (language becomes known after detection, so for
     # skip-checks we use the forced language when given, else probe for any).
     def srt_path(lang: str) -> Path:
-        return out_dir / f"{path.stem}.{lang}.srt"
+        return out_dir / f"{path.stem}.{lang}{sub_ext}"
 
     def mux_path() -> Path:
         ext = f".{container}"
@@ -567,7 +1255,7 @@ def process_file(
     def has_sidecar() -> bool:
         prefix = f"{path.stem}."
         return any(
-            p.name.startswith(prefix) and p.suffix.lower() == ".srt"
+            p.name.startswith(prefix) and p.suffix.lower() in (".srt", ".ass")
             for p in out_dir.iterdir()
         )
 
@@ -577,7 +1265,7 @@ def process_file(
         if mode == "sidecar" and srt_exists:
             emit("skipped", 100, "sidecar exists")
             return f"skipped (sidecar exists): {name}"
-        if mode == "mux" and mux_exists:
+        if mode in ("mux", "burn") and mux_exists:
             emit("skipped", 100, "muxed output exists")
             return f"skipped (muxed output exists): {name}"
         if mode == "both" and mux_exists and srt_exists:
@@ -636,18 +1324,29 @@ def process_file(
         tracks.append((target_lang, translator.translate_segments(segments, lang, target_lang)))
         log(name, f"translated to {target_lang} in {time.monotonic() - tx0:.0f}s")
 
+    if use_ass and mode in ("mux", "both") and not is_audio and not mux_ass:
+        log(name, "note: MP4 cannot embed .ass; the embedded track will be plain text")
+
+    def track_content(track_segments: list[dict], ext: str) -> str:
+        if ext == ".ass":
+            return segments_to_ass(track_segments, style=getattr(args, "sub_style", None), karaoke=use_karaoke)
+        return segments_to_srt(track_segments)
+
     srt_files: list[tuple[str, Path]] = []
     temp_srts: list[Path] = []
     for track_lang, track_segments in tracks:
-        content = segments_to_srt(track_segments)
+        sidecar: Path | None = None
         if mode in ("sidecar", "both"):
             sidecar = srt_path(track_lang)
-            sidecar.write_text(content, encoding="utf-8")
+            sidecar.write_text(track_content(track_segments, sub_ext), encoding="utf-8")
             log(name, f"sidecar written: {sidecar.name}")
+        if mode not in ("mux", "both") or is_audio:
+            continue
+        if sidecar is not None and sub_ext == mux_ext:
             srt_files.append((track_lang, sidecar))
         else:
-            tmp = out_dir / f".{path.stem}.{track_lang}.{uuid.uuid4().hex[:6]}.tmp.srt"
-            tmp.write_text(content, encoding="utf-8")
+            tmp = out_dir / f".{path.stem}.{track_lang}.{uuid.uuid4().hex[:6]}.tmp{mux_ext}"
+            tmp.write_text(track_content(track_segments, mux_ext), encoding="utf-8")
             temp_srts.append(tmp)
             srt_files.append((track_lang, tmp))
 
@@ -657,6 +1356,26 @@ def process_file(
             target = mux_path()
             log(name, f"muxing {len(srt_files)} subtitle track(s) into {target.name} (stream copy)…")
             mux_subtitles(path, srt_files, target, args.default_track)
+            log(name, f"done: {target.name}")
+        elif mode == "burn" and not is_audio:
+            emit("burning", 96)
+            target = mux_path()
+            # Burn a single track: the first requested translation when --to
+            # was given (that's the language the user wants to read), else the
+            # original-language transcription.
+            burn_lang, burn_segments = tracks[1] if len(tracks) > 1 else tracks[0]
+            if len(tracks) > 2:
+                log(name, f"burn mode renders one track only: burning '{burn_lang}'")
+            tmp_ass = out_dir / f".{path.stem}.{burn_lang}.{uuid.uuid4().hex[:6]}.burn.ass"
+            tmp_ass.write_text(
+                segments_to_ass(burn_segments, style=getattr(args, "sub_style", None), karaoke=use_karaoke),
+                encoding="utf-8",
+            )
+            log(name, f"burning '{burn_lang}' subtitles into {target.name} (re-encode, this is slow)…")
+            try:
+                burn_subtitles(path, tmp_ass, target)
+            finally:
+                tmp_ass.unlink(missing_ok=True)
             log(name, f"done: {target.name}")
     finally:
         for tmp in temp_srts:
@@ -676,10 +1395,14 @@ def build_parser(config: dict) -> argparse.ArgumentParser:
     parser.add_argument("inputs", nargs="+", help="video/audio files or directories")
     parser.add_argument("-l", "--language", default=None, help="force audio language (ISO code, e.g. es); default: auto-detect per file")
     parser.add_argument("-m", "--model", default="large-v3-turbo", help="faster-whisper model (tiny/base/small/medium/large-v3/large-v3-turbo)")
-    parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"], help="inference device")
+    parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu", "mlx", "vulkan"],
+                        help="inference device (cuda = NVIDIA GPU, mlx = Apple Silicon GPU, "
+                             "vulkan = AMD/Intel GPU via whisper.cpp; auto picks the best one available)")
     parser.add_argument("--compute-type", default="auto", help="ctranslate2 compute type (auto/float16/int8/int8_float16)")
-    parser.add_argument("--mode", default="sidecar", choices=["mux", "sidecar", "both"],
-                        help="mux: new file with embedded toggleable track; sidecar: .srt next to the video (Jellyfin auto-detects it); both")
+    parser.add_argument("--mode", default="sidecar", choices=["mux", "sidecar", "both", "burn"],
+                        help="mux: new file with embedded toggleable track; sidecar: .srt next to the video "
+                             "(Jellyfin auto-detects it); both; burn: re-encode with the styled subtitles "
+                             "burned into the image (plays anywhere, but VERY SLOW and slightly lossy)")
     parser.add_argument("--container", default="auto", choices=["auto", "mkv", "mp4"],
                         help="container for muxed output; auto keeps the original when possible (mp4/mov stay mp4, rest become mkv)")
     parser.add_argument("--no-vad", action="store_true",
@@ -699,6 +1422,40 @@ def build_parser(config: dict) -> argparse.ArgumentParser:
     parser.add_argument("--task", default="transcribe", choices=["transcribe", "translate"],
                         help="translate = Whisper's built-in English translation (prefer '--to en', which uses NLLB)")
     parser.add_argument("--default-track", action="store_true", help="mark the new subtitle track as default (enabled on playback)")
+    parser.add_argument("--word-animation", action="store_true",
+                        help="karaoke-style .ass subtitles: each word lights up as it is spoken "
+                             "(needs an ASS-capable player; MP4 muxes fall back to plain text)")
+
+    style = parser.add_argument_group(
+        "subtitle style",
+        "visual style of the subtitles, mirroring the web visualizer. Any of these "
+        "options switches the output to styled .ass files (SRT cannot carry styling); "
+        "they also drive --mode burn and --word-animation. Command-line values "
+        "override the [style] section of the config file.",
+    )
+    style.add_argument("--style", default=None, choices=sorted(STYLE_PRESETS),
+                       help="style preset from the web app (default/clean/bold/pop/neon/classic/terminal)")
+    style.add_argument("--sub-font", default=None, metavar="FONT",
+                       help="font: sans/serif/rounded/condensed/mono, or a literal font name (e.g. 'Verdana')")
+    style.add_argument("--sub-size", type=float, default=None, metavar="X",
+                       help="size multiplier (1.0 = normal, like the web slider)")
+    style.add_argument("--sub-color", default=None, metavar="#RRGGBB", help="text color")
+    style.add_argument("--sub-bold", action=argparse.BooleanOptionalAction, default=None, help="bold text")
+    style.add_argument("--sub-italic", action=argparse.BooleanOptionalAction, default=None, help="italic text")
+    style.add_argument("--sub-align", default=None, choices=["left", "center", "right"], help="text alignment")
+    style.add_argument("--sub-position", default=None, choices=["top", "middle", "bottom"],
+                       help="vertical position on screen")
+    style.add_argument("--sub-bg", action=argparse.BooleanOptionalAction, default=None,
+                       help="box behind the text (--no-sub-bg removes it)")
+    style.add_argument("--sub-bg-color", default=None, metavar="#RRGGBB", help="box color")
+    style.add_argument("--sub-bg-opacity", type=float, default=None, metavar="0.0-1.0",
+                       help="box opacity: 0.0 fully transparent … 1.0 solid")
+    style.add_argument("--sub-outline", action=argparse.BooleanOptionalAction, default=None,
+                       help="black outline around the text (used when the box is off)")
+    style.add_argument("--sub-highlight-color", default=None, metavar="#RRGGBB",
+                       help="spoken-word color for --word-animation karaoke")
+    style.add_argument("--ass", dest="force_ass", action="store_true",
+                       help="write .ass instead of .srt even without style changes or karaoke")
     parser.add_argument("--no-recursive", dest="recursive", action="store_false", help="don't scan directories recursively")
     parser.add_argument("--overwrite", action="store_true", help="regenerate even if outputs already exist")
 
@@ -742,6 +1499,8 @@ def finalize_args(args: argparse.Namespace, config: dict) -> None:
         seen_langs.append(lang)
     args.to_langs = seen_langs
     args.translation_model = tx_cfg.get("model", DEFAULT_TRANSLATION_MODEL)
+    global ROMAJI_JA
+    ROMAJI_JA = bool(tx_cfg.get("romaji_ja", True))
 
     # Subtitle line shaping from [lines].
     lines_cfg = config.get("lines", {})
@@ -750,6 +1509,46 @@ def finalize_args(args: argparse.Namespace, config: dict) -> None:
     MAX_LINE_WORDS = int(lines_cfg.get("max_words", MAX_LINE_WORDS))
     MAX_LINE_SECONDS = float(lines_cfg.get("max_seconds", MAX_LINE_SECONDS))
     WORD_GAP_BREAK = float(lines_cfg.get("word_gap_break", WORD_GAP_BREAK))
+
+    # Visual style: preset -> [style] config section -> individual CLI flags,
+    # each layer overriding the previous one (like the web visualizer, where
+    # touching a knob after picking a preset customizes it).
+    style_cfg = dict(config.get("style", {}))
+    resolved = dict(DEFAULT_STYLE)
+    preset = args.style if args.style is not None else str(style_cfg.get("preset", "") or "")
+    if preset:
+        if preset in STYLE_PRESETS:
+            resolved.update(STYLE_PRESETS[preset])
+        else:
+            print(f"warning: unknown style preset '{preset}' ignored "
+                  f"(available: {', '.join(sorted(STYLE_PRESETS))})", file=sys.stderr)
+    for key in DEFAULT_STYLE:
+        if key in style_cfg:
+            resolved[key] = style_cfg[key]
+    cli_style = {
+        "font": args.sub_font,
+        "size": args.sub_size,
+        "color": args.sub_color,
+        "bold": args.sub_bold,
+        "italic": args.sub_italic,
+        "align": args.sub_align,
+        "position": args.sub_position,
+        "bg": args.sub_bg,
+        "bg_color": args.sub_bg_color,
+        "bg_opacity": args.sub_bg_opacity,
+        "outline": args.sub_outline,
+        "highlight_color": args.sub_highlight_color,
+    }
+    for key, value in cli_style.items():
+        if value is not None:
+            resolved[key] = value
+    resolved["size"] = max(0.5, min(2.0, float(resolved.get("size", 1.0))))
+    resolved["bg_opacity"] = max(0.0, min(1.0, float(resolved.get("bg_opacity", 0.84))))
+    args.sub_style = resolved
+    # A customized style can only travel in .ass files, so it switches the
+    # sidecar/mux format automatically (also via the explicit --ass flag, or
+    # when a preset was picked on purpose — even the "default" one).
+    args.styled_ass = bool(args.force_ass) or bool(preset) or resolved != DEFAULT_STYLE
 
 
 def main() -> int:
@@ -770,6 +1569,7 @@ def main() -> int:
             pass
 
     _enable_windows_cuda_dlls()
+    _install_terminate_guards()
 
     files = collect_inputs(args.inputs, args.recursive, exclude_dir=args.output_dir)
     files = dedupe_output_collisions(files, args)
@@ -812,6 +1612,8 @@ def main() -> int:
         pool.shutdown(wait=False, cancel_futures=True)
         # Transcriptions run inside native (CTranslate2) threads that cannot be
         # interrupted from Python, so a hard exit is the only reliable stop.
+        # os._exit skips atexit, so reap the ffmpeg children explicitly first.
+        _kill_children()
         os._exit(130)
 
     print(f"\nFinished in {(time.monotonic() - t0)/60:.1f} min — {len(files) - failures} ok, {failures} failed.")

@@ -8,6 +8,7 @@ import {
   MARIAN_TRANSLATION_MODELS,
   TRANSLATION_MODEL,
 } from "@/scripts/languages.ts"
+import { engineEnabled, translateWithEngine } from "@/scripts/localEngine.ts"
 
 const BRACKETED_SOUND_TRANSLATIONS: Record<string, Record<string, string>> = {
   es: {
@@ -268,12 +269,21 @@ export function createTranslationService(options: TranslationServiceOptions) {
     options.updateDownloadStatus("translation", "downloading")
     options.downloads.translation.readyNote = ""
     options.setStatus(options.tt("steps.downloadingTranslation"), "busy")
-    await options.transformersClient.call("ensure-translation", {
-      backend,
-      model,
-      webgpu: hasWebGPU,
-      requireWebGPU,
-    })
+    try {
+      await options.transformersClient.call("ensure-translation", {
+        backend,
+        model,
+        webgpu: hasWebGPU,
+        requireWebGPU,
+      })
+    } catch (err) {
+      // Never leave the item stuck in "downloading": the status dock would
+      // show a perpetual "download in progress".
+      activeTranslationBackend = null
+      activeTranslationModel = ""
+      options.updateDownloadStatus("translation", "error")
+      throw err
+    }
     translationReady = true
     options.updateDownloadStatus("translation", "ready")
   }
@@ -487,6 +497,35 @@ export function createTranslationService(options: TranslationServiceOptions) {
     const preparedTexts = segments.map((s) =>
       translateBracketedSoundCues(s.text, targetLang),
     )
+
+    // Local engine first (only when the user has the engine checkbox on):
+    // NLLB on the server GPU — no ~900 MB browser download and no WASM
+    // inference hogging the client CPU. Falls back to the browser pipeline
+    // on any failure.
+    if (engineEnabled()) {
+      try {
+        const translatedTexts = await translateWithEngine(
+          preparedTexts,
+          sourceLang,
+          targetLang,
+        )
+        const item = options.downloads.translation
+        item.readyNote = options.tt("downloads.translationBuiltin", {
+          engine: options.tt("engine.translator"),
+        })
+        item.total = 0
+        item.loaded = 0
+        translationReady = true
+        options.updateDownloadStatus("translation", "ready")
+        return segments.map((s, i) => ({
+          ...s,
+          text: translatedTexts[i] || s.text,
+        }))
+      } catch (err) {
+        console.warn("[translate] local engine failed, using browser pipeline", err)
+      }
+    }
+
     const cues = segments.map((s, i) => ({
       text: preparedTexts[i],
       start: s.start,

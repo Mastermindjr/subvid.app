@@ -1,8 +1,10 @@
 ---
 import ChevronLeft from "@/assets/svg/chevron-left.svg"
-import { useTranslations } from "@/i18n/ui"
+import { defaultLang, languages, toLang, useTranslations } from "@/i18n/ui"
 
 const t = useTranslations(Astro.currentLocale)
+const current = toLang(Astro.currentLocale)
+const localePath = (code: string) => (code === defaultLang ? "/" : `/${code}/`)
 ---
 
 <section id="stage-config" class="stage-config" hidden>
@@ -12,6 +14,21 @@ const t = useTranslations(Astro.currentLocale)
       {t.config.changeVideo}
     </button>
     <div id="config-meta" class="video-meta"></div>
+    <nav class="top-lang" aria-label={t.footer.language}>
+      {
+        Object.entries(languages).map(([code]) => (
+          <a
+            class="top-lang-link"
+            href={localePath(code)}
+            hreflang={code}
+            data-locale={code}
+            aria-current={code === current ? "true" : undefined}
+          >
+            {code.toUpperCase()}
+          </a>
+        ))
+      }
+    </nav>
   </header>
 
   <div class="config-card">

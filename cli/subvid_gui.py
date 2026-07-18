@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -25,8 +26,10 @@ SCRIPT = Path(__file__).with_name("subvid_batch.py")
 
 MODELS = ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"]
 LANGUAGES = ["auto", "es", "en", "fr", "de", "pt", "it", "nl", "ru", "ja", "ko", "zh", "ar", "hi", "pl", "tr"]
-MODES = ["both", "mux", "sidecar"]
+MODES = ["both", "mux", "sidecar", "burn"]
 CONTAINERS = ["auto", "mkv", "mp4"]
+STYLES = ["", "default", "clean", "bold", "pop", "neon", "classic", "terminal"]
+DEVICES = ["auto", "cuda", "vulkan", "mlx", "cpu"]
 TASKS = {"Idioma original": "transcribe", "Traducir a inglés": "translate"}
 
 
@@ -78,7 +81,12 @@ class App:
         out_frame.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
 
         self.var_mode = tk.StringVar(value=general.get("mode", "sidecar"))
-        row(1, 0, "Modo", ttk.Combobox(opts, textvariable=self.var_mode, values=MODES, state="readonly"))
+        mode_box = ttk.Combobox(opts, textvariable=self.var_mode, values=MODES, state="readonly")
+        row(1, 0, "Modo", mode_box)
+        self.mode_hint = ttk.Label(opts, text="", foreground="#b45309")
+        self.mode_hint.grid(row=1, column=4, sticky="w")
+        mode_box.bind("<<ComboboxSelected>>", lambda _e: self.sync_mode_hint())
+        self.sync_mode_hint()
         self.var_model = tk.StringVar(value=general.get("model", "large-v3-turbo"))
         row(1, 2, "Modelo", ttk.Combobox(opts, textvariable=self.var_model, values=MODELS))
 
@@ -98,8 +106,14 @@ class App:
         self.var_to = tk.StringVar(value=",".join(tx_langs) if isinstance(tx_langs, list) else str(tx_langs))
         row(4, 0, "Idiomas extra (ej: es,en)", ttk.Entry(opts, textvariable=self.var_to))
 
+        self.var_style = tk.StringVar(value=str(cfg.get("style", {}).get("preset", "") or ""))
+        row(4, 2, "Estilo (.ass, vacío = SRT)", ttk.Combobox(opts, textvariable=self.var_style, values=STYLES, state="readonly"))
+
+        self.var_device = tk.StringVar(value=general.get("device", "auto"))
+        row(5, 0, "Dispositivo (GPU)", ttk.Combobox(opts, textvariable=self.var_device, values=DEVICES, state="readonly"))
+
         checks = ttk.Frame(opts)
-        checks.grid(row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        checks.grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.var_recursive = tk.BooleanVar(value=bool(general.get("recursive", True)))
         self.var_overwrite = tk.BooleanVar(value=bool(general.get("overwrite", False)))
         self.var_default_track = tk.BooleanVar(value=bool(general.get("default_track", False)))
@@ -110,7 +124,7 @@ class App:
         ttk.Checkbutton(checks, text="Filtro de voz (VAD)", variable=self.var_vad, command=self.sync_vad).pack(side="left")
 
         vad_frame = ttk.Frame(opts)
-        vad_frame.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        vad_frame.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         vad_frame.columnconfigure(1, weight=1)
         ttk.Label(vad_frame, text="Umbral VAD (más bajo = más sensible)").grid(row=0, column=0, padx=(0, 8))
         self.var_vad_threshold = tk.DoubleVar(value=float(vad.get("threshold", 0.5)))
@@ -163,6 +177,11 @@ class App:
         state = "normal" if self.var_vad.get() else "disabled"
         self.vad_scale.config(state=state)
 
+    def sync_mode_hint(self) -> None:
+        self.mode_hint.config(
+            text="⚠ burn reencodea el vídeo: MUY LENTO" if self.var_mode.get() == "burn" else "",
+        )
+
     # ── Run control ──
     def build_command(self) -> list[str]:
         cmd = [sys.executable, "-u", str(SCRIPT), *self.inputs_list.get(0, "end")]
@@ -175,6 +194,12 @@ class App:
         to_langs = self.var_to.get().strip()
         if to_langs:
             cmd += ["--to", to_langs]
+        style = self.var_style.get().strip()
+        if style:
+            cmd += ["--style", style]
+        device = self.var_device.get().strip()
+        if device and device != "auto":
+            cmd += ["--device", device]
         if self.var_output.get().strip():
             cmd += ["-o", self.var_output.get().strip()]
         if not self.var_recursive.get():
@@ -195,7 +220,13 @@ class App:
             return
         cmd = self.build_command()
         self.append_log("$ " + " ".join(cmd[2:]) + "\n\n")
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        popen_kwargs: dict = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            # Own process group so Stop can kill the CLI *and* its ffmpeg
+            # children in one os.killpg call (the POSIX taskkill /T).
+            popen_kwargs["start_new_session"] = True
         try:
             self.process = subprocess.Popen(
                 cmd,
@@ -204,7 +235,7 @@ class App:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
+                **popen_kwargs,
             )
         except OSError as e:
             messagebox.showerror("subvid", f"No se pudo lanzar el proceso: {e}")
@@ -237,7 +268,12 @@ class App:
                 capture_output=True,
             )
         else:
-            proc.kill()
+            # Same semantics on POSIX: SIGKILL the whole process group so no
+            # ffmpeg child can survive the CLI.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()
 
     def drain_log(self) -> None:
         try:

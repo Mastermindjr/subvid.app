@@ -21,6 +21,7 @@ export function createDownloadsController({
       loaded: 0,
       total: 0,
       speed: 0,
+      pendingNote: tt("downloads.pendingNoteBrowser"),
     },
     asr: {
       label: tt("downloads.whisper"),
@@ -29,6 +30,7 @@ export function createDownloadsController({
       loaded: 0,
       total: 0,
       speed: 0,
+      pendingNote: tt("downloads.pendingNoteBrowser"),
     },
     translation: {
       label: tt("downloads.translation"),
@@ -50,6 +52,20 @@ export function createDownloadsController({
 
   let clearConfirmTimer = 0
   let cachedModelsBytes = 0
+
+  // Re-resolve every stored string after an in-place locale switch.
+  function refreshLabels() {
+    downloads.ffmpeg.label = tt("downloads.ffmpeg")
+    downloads.ffmpeg.pendingNote = tt("downloads.pendingNoteBrowser")
+    downloads.asr.label = tt("downloads.whisper")
+    downloads.asr.pendingNote = tt("downloads.pendingNoteBrowser")
+    downloads.translation.label = tt("downloads.translation")
+    downloads.translation.pendingNote = hasBuiltInTranslationSupport()
+      ? tt("downloads.pendingNoteChrome")
+      : tt("downloads.pendingNote")
+    STATE_LABEL.error = tt("downloads.downloadFailed")
+    renderDownloads()
+  }
 
   function trackSpeed(item: any, loaded: number) {
     const now = performance.now()
@@ -247,13 +263,15 @@ export function createDownloadsController({
           ? tt("downloads.inProgress", { n: liveCount })
           : ""
 
+    // Idle (nothing started) shows no label at all: the dock stays quiet
+    // until a download is actually running, finished or failed.
     const labelText = allReady
       ? tt("downloads.allReady")
       : hasError
         ? tt("downloads.downloadFailed")
         : liveCount
           ? tt("downloads.downloadInProgress")
-          : tt("downloads.preparingModels")
+          : ""
     ui.downloadsLabel.textContent = labelText
     ui.downloadsLabel.dataset.state = allReady
       ? "ready"
@@ -361,5 +379,6 @@ export function createDownloadsController({
     fetchWithProgress,
     refreshClearModelsUI,
     clearLocalModels,
+    refreshLabels,
   }
 }

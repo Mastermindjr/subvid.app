@@ -12,13 +12,26 @@ model = "large-v3-turbo"
 # Idioma del audio ("es", "en", …). Vacío = autodetección por archivo.
 language = ""
 
-# Dispositivo: auto / cuda / cpu
+# Dispositivo: auto / cuda / cpu / mlx / vulkan
+# auto elige la mejor opción disponible:
+#   - cuda   → GPU NVIDIA (CTranslate2 + cuBLAS/cuDNN; se instala solo con
+#              requirements.txt).
+#   - mlx    → GPU de Apple Silicon en Macs M1–M4 (requiere `pip install
+#              mlx-whisper`).
+#   - vulkan → GPU AMD o Intel (dedicada o integrada) vía whisper.cpp; requiere
+#              pywhispercpp compilado con Vulkan — instrucciones en
+#              requirements.txt. auto lo usa si no hay NVIDIA y está instalado.
+#   - cpu    → sin GPU.
+# Notas: en mlx y vulkan el filtro VAD no está disponible, y la traducción NLLB
+# sigue en CPU int8 (CTranslate2 solo acelera con CUDA).
 device = "auto"
 
 # Tipo de cómputo de CTranslate2: auto / float16 / int8 / int8_float16
 compute_type = "auto"
 
-# Qué generar: mux (vídeo con pista incrustada) / sidecar (.srt externo) / both
+# Qué generar: mux (vídeo con pista incrustada) / sidecar (.srt externo) /
+# both / burn (subtítulos quemados en la imagen: se ven en cualquier
+# reproductor, pero reencodea el vídeo — lento y con ligera pérdida).
 # sidecar es lo recomendado para Jellyfin: detecta los .srt automáticamente y
 # no reescribe los vídeos (importante en discos SMR como los WD Red EFAX).
 mode = "sidecar"
@@ -40,11 +53,58 @@ task = "transcribe"
 # Marcar la pista de subtítulos como activa por defecto al reproducir.
 default_track = false
 
+# Subtítulos "karaoke" (.ass): cada palabra se ilumina al pronunciarse.
+# Genera archivos .ass en vez de .srt (compatibles con Jellyfin, VLC, mpv…).
+# Al incrustar en MP4 la pista incrustada es texto plano (MP4 no admite ASS).
+word_animation = false
+
 # Escanear subcarpetas al pasar un directorio.
 recursive = true
 
 # Regenerar aunque las salidas ya existan.
 overwrite = false
+
+[style]
+# Estilo visual de los subtítulos (el "visualizador" de la versión web).
+# Cualquier cambio aquí hace que las salidas sean .ass estilizados en vez de
+# .srt (el SRT no admite estilos); también se aplica al modo burn y al karaoke.
+#
+# Preset base, igual que en la web: default / clean / bold / pop / neon /
+# classic / terminal. Vacío = default. Las claves siguientes (descomentadas)
+# ajustan el preset elegido.
+preset = ""
+
+# Fuente: sans / serif / rounded / condensed / mono, o un nombre literal
+# instalado en el reproductor (p. ej. "Verdana").
+#font = "sans"
+
+# Multiplicador de tamaño (1.0 = normal, rango 0.5–2.0).
+#size = 1.0
+
+# Color del texto (#RRGGBB).
+#color = "#ffffff"
+
+# Negrita / cursiva.
+#bold = false
+#italic = false
+
+# Alineación horizontal: left / center / right.
+#align = "center"
+
+# Posición vertical: top / middle / bottom.
+#position = "bottom"
+
+# Caja de fondo tras el texto, su color y su opacidad (0.0 transparente – 1.0
+# sólida — la "transparencia" del visualizador web).
+#bg = true
+#bg_color = "#06080b"
+#bg_opacity = 0.84
+
+# Contorno negro del texto (se usa cuando la caja está desactivada).
+#outline = false
+
+# Color de la palabra "cantada" en el karaoke (word_animation).
+#highlight_color = "#b8f060"
 
 [translation]
 # Idiomas de subtítulos adicionales generados en cada pasada (traducción local
@@ -57,6 +117,10 @@ output_langs = []
 #   "JustFrederik/nllb-200-distilled-1.3B-ct2-float16"   (~2.6 GB, recomendado)
 #   "JustFrederik/nllb-200-3.3B-ct2-float16"             (~6.7 GB, la mejor)
 model = "JustFrederik/nllb-200-distilled-1.3B-ct2-float16"
+
+# Los subtítulos generados en japonés se transliteran a romaji (alfabeto
+# latino) con pykakasi. Ponlo a false para conservar kanji/kana.
+romaji_ja = true
 
 [vad]
 # Filtro de actividad de voz (Silero). Descarta tramos sin habla antes de
@@ -75,6 +139,42 @@ min_silence_ms = 2000
 
 # Margen (ms) que se conserva alrededor de cada tramo de voz detectado.
 speech_pad_ms = 400
+
+[server]
+# Opciones de subvid_server.py (el motor local que usa la web).
+#
+# Escenarios:
+#   - Solo este equipo (por defecto): host = "127.0.0.1", sin token.
+#   - Red local / internet: host = "0.0.0.0". Cualquier cliente puede usar
+#     los modos que SUBEN archivos (web-local y batch por subida) sin token.
+#     El "modo servidor" (explorar y procesar las carpetas de ESTE equipo)
+#     sí exige un token: si no configuras uno aquí (o con --token /
+#     SUBVID_TOKEN), se genera uno aleatorio y se imprime al arrancar. La
+#     web lo pide al activar el modo servidor; también puedes entrar una vez
+#     con  http://IP-del-equipo:8787/?engineToken=TU_TOKEN  (se guarda en el
+#     navegador y desaparece de la barra de direcciones).
+#   - Internet (uso personal on-the-go): NO abras el puerto directamente —
+#     el tráfico iría sin cifrar y el token viajaría en claro. Opciones:
+#       · Tailscale (recomendado, gratis): instala tailscale en el servidor y
+#         en el móvil/portátil y accede por la IP 100.x como si fuera LAN,
+#         cifrado de extremo a extremo sin abrir puertos.
+#       · Reverse proxy con HTTPS (Caddy):  caddy reverse-proxy
+#         --from tu-dominio.com --to 127.0.0.1:8787  (certificado automático;
+#         el servidor puede quedarse en 127.0.0.1 pero PON token igualmente,
+#         porque el proxy expone la API a internet).
+#
+# Defensa adicional: fs_roots limita qué carpetas puede explorar y procesar
+# la API (recomendado si expones el servidor). Vacío = todo el disco.
+#
+#host = "127.0.0.1"
+#port = 8787
+#token = ""
+#fs_roots = ["D:/Media"]
+# Tamaño máximo de subida por archivo (MB) en /api/transcribe.
+#max_upload_mb = 4096
+# Orígenes web adicionales autorizados a llamar a la API (CORS). localhost y
+# https://subvid.app ya están permitidos.
+#allowed_origins = []
 
 [lines]
 # Forma de las líneas de subtítulo (a partir de los timestamps por palabra).

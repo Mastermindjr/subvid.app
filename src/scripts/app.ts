@@ -6,7 +6,15 @@ import { createExportModal } from "@/scripts/export/exportModal.ts";
 import { createVideoExporter } from "@/scripts/export/videoExport.ts";
 import { baseFileName, prettifyBytes } from "@/scripts/file.ts";
 import { I18N, langName, tt } from "@/scripts/i18n.ts";
-import { detectEngine } from "@/scripts/localEngine.ts";
+import {
+  detectEngine,
+  engineNeedsToken,
+  rememberEngineToken,
+  setEngineOptIn,
+  setEngineToken,
+  verifyServerAccess,
+} from "@/scripts/localEngine.ts";
+import { onLocaleChange, switchLocale } from "@/scripts/localeSwitch.ts";
 import { createBatchPanel } from "@/scripts/stages/batchPanel.ts";
 import { createStageManager } from "@/scripts/stageManager.ts";
 import { createConfigStageController } from "@/scripts/stages/configStage.ts";
@@ -38,6 +46,7 @@ const {
   fetchWithProgress,
   refreshClearModelsUI,
   clearLocalModels,
+  refreshLabels: refreshDownloadLabels,
 } = createDownloadsController({
   ui,
   tt,
@@ -426,8 +435,9 @@ ui.clearModelsBtn?.addEventListener("click", clearLocalModels);
 // run on the user's GPU and whole folders can be processed in batch.
 const batchPanel = createBatchPanel({ ui, tt, langName });
 batchPanel.wire();
-const baseLocalEngineHint = ui.localEngineHint?.textContent || "";
+let lastEngineInfo: { device: string; model: string } | null = null;
 function applyEngineState(info: { device: string; model: string } | null) {
+  lastEngineInfo = info;
   ui.engineOn.hidden = !info;
   ui.engineOff.hidden = !!info;
   ui.localEngineField.hidden = !info;
@@ -438,10 +448,126 @@ function applyEngineState(info: { device: string; model: string } | null) {
   });
   ui.engineBadge.textContent = badge;
   if (ui.localEngineHint) {
-    ui.localEngineHint.textContent = `${baseLocalEngineHint} (${badge})`;
+    ui.localEngineHint.textContent = `${tt("engine.hint")} (${badge})`;
   }
 }
-detectEngine().then(applyEngineState);
+// The "use local engine" checkbox gates transcription AND translation:
+// unchecked = everything runs in this browser even if the engine is up.
+setEngineOptIn(ui.localEngine?.checked ?? true);
+ui.localEngine?.addEventListener("change", () =>
+  setEngineOptIn(ui.localEngine.checked),
+);
+
+// ── App mode: Local vs Server (footer switch) ──
+// Server mode = work with the folders/GPU of the engine machine everywhere:
+// the batch panel browses server folders and web-mode processing is routed
+// through the engine. It needs the access token when the engine is exposed.
+const APP_MODE_KEY = "subvid:appMode";
+let appServerMode = false;
+
+function applyAppMode() {
+  ui.appModeLocal?.setAttribute("aria-pressed", String(!appServerMode));
+  ui.appModeServer?.setAttribute("aria-pressed", String(appServerMode));
+  batchPanel.setServerMode(appServerMode);
+}
+
+async function verifyOrAskToken(interactive: boolean): Promise<boolean> {
+  if (await verifyServerAccess()) return true;
+  if (!interactive || !engineNeedsToken()) return false;
+  let message = tt("batch.tokenPrompt");
+  for (;;) {
+    const supplied = window.prompt(message);
+    if (!supplied?.trim()) return false;
+    setEngineToken(supplied);
+    if (await verifyServerAccess()) break;
+    message = `${tt("batch.tokenBad")}\n${tt("batch.tokenPrompt")}`;
+  }
+  if (window.confirm(tt("appMode.rememberDevice"))) rememberEngineToken();
+  return true;
+}
+
+async function enterServerMode(interactive: boolean) {
+  if (appServerMode) return;
+  if (!(await verifyOrAskToken(interactive))) {
+    if (interactive) window.alert(tt("batch.serverModeFailed"));
+    return;
+  }
+  appServerMode = true;
+  try {
+    localStorage.setItem(APP_MODE_KEY, "server");
+  } catch {}
+  if (ui.localEngine) {
+    ui.localEngine.checked = true;
+    setEngineOptIn(true);
+  }
+  applyAppMode();
+}
+
+function enterLocalMode() {
+  if (!appServerMode) return;
+  appServerMode = false;
+  try {
+    localStorage.setItem(APP_MODE_KEY, "local");
+  } catch {}
+  applyAppMode();
+}
+
+ui.appModeServer?.addEventListener("click", () => {
+  enterServerMode(true);
+});
+ui.appModeLocal?.addEventListener("click", enterLocalMode);
+
+detectEngine().then((info) => {
+  applyEngineState(info);
+  // Restore server mode for saved devices (silently — never prompt on load).
+  let stored = "";
+  try {
+    stored = localStorage.getItem(APP_MODE_KEY) || "";
+  } catch {}
+  if (info && stored === "server") enterServerMode(false);
+});
+
+// ── In-place language switch ──
+// Swapping locales must never reload the page (that would drop the loaded
+// video, generated segments and any running job): replace texts in place and
+// re-run the dynamic renderers. Falls back to a normal navigation on failure.
+document.querySelectorAll<HTMLAnchorElement>(".top-lang-link").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (link.getAttribute("aria-current") === "true") return;
+    const target = link.getAttribute("href") || "/";
+    const locale = link.getAttribute("data-locale");
+    switchLocale(target)
+      .then(() => {
+        document.querySelectorAll(".top-lang-link").forEach((l) => {
+          if (l.getAttribute("data-locale") === locale)
+            l.setAttribute("aria-current", "true");
+          else l.removeAttribute("aria-current");
+        });
+      })
+      .catch((e) => {
+        console.warn("[locale] in-place switch failed, navigating instead", e);
+        location.href = target;
+      });
+  });
+});
+onLocaleChange(() => {
+  const inputValue = ui.inputLang.value;
+  const outputValue = ui.outputLang.value;
+  buildLangSelects();
+  ui.inputLang.value = inputValue;
+  ui.outputLang.value = outputValue;
+  populateAddLang();
+});
+onLocaleChange(() => {
+  renderTabs();
+  renderSegments();
+  renderTimeline();
+  updateCaption();
+});
+onLocaleChange(() => refreshDownloadLabels());
+onLocaleChange(() => batchPanel.refreshTexts());
+onLocaleChange(() => applyEngineState(lastEngineInfo));
 ui.engineRetry?.addEventListener("click", async () => {
   ui.engineRetry.disabled = true;
   try {
